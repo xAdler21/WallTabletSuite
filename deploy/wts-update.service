@@ -1,0 +1,8 @@
+[Unit]
+Description=WallTabletSuite Update (git fetch, Neustart, Rückfall)
+
+[Service]
+Type=oneshot
+User=kiosk
+Environment=WTS_DATA=/var/lib/walltablet
+ExecStart=/bin/bash /opt/walltablet/deploy/update.sh

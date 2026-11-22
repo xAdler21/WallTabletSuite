@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WallTabletSuite</title>
+<style>
+  :root { --bg:#0f1113; --card:#181b1f; --line:#2a2f35; --text:#e8eaed; --dim:#9aa0a6; --accent:#2f6fd0; --red:#d0453b; --green:#2e9d5b; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui, sans-serif; }
+  main { max-width: 900px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 20px; margin: 8px 0 16px; display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; }
+  h1 small { color: var(--dim); font-weight: 400; font-size: 13px; }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  label { display:block; color: var(--dim); font-size: 13px; margin: 8px 0 4px; }
+  input, select { width:100%; background:#0f1113; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:9px 10px; font:inherit; }
+  input[type=checkbox] { width:auto; margin-right:8px; }
+  .check { display:flex; align-items:center; color:var(--text); font-size:15px; }
+  button { background: #262b31; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 9px 14px; font: inherit; cursor: pointer; }
+  button:hover { border-color: #3d444c; }
+  button.primary { background: var(--accent); border-color: var(--accent); color:#fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap: wrap; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0 12px; }
+  .tab { display:grid; grid-template-columns: 1fr 2fr auto; gap:8px; margin-bottom:8px; align-items:center; }
+  .tab .btns { display:flex; gap:4px; }
+  .tab button { padding: 8px 10px; }
+  @media (max-width: 600px) { .tab { grid-template-columns: 1fr; } }
+  #lockbtn { font-size: 17px; padding: 14px 22px; min-width: 200px; }
+  #lockbtn.locked { background: var(--red); border-color: var(--red); color:#fff; }
+  #lockbtn.unlocked { background: var(--green); border-color: var(--green); color:#fff; }
+  .dim { color: var(--dim); font-size: 13px; }
+  .msg { min-height: 20px; font-size: 13px; margin-top: 8px; }
+  .err { color: #ff8a80; }
+  .ok { color: #81c995; }
+  pre { background:#0b0c0e; border:1px solid var(--line); border-radius:8px; padding:10px; font-size:12px; max-height:220px; overflow:auto; white-space:pre-wrap; word-break:break-all; margin: 8px 0 0; }
+  code { background:#0b0c0e; padding:2px 6px; border-radius:6px; font-size:13px; word-break: break-all; }
+  table { width:100%; border-collapse: collapse; font-size: 14px; }
+  td { padding: 6px 4px; border-top: 1px solid var(--line); vertical-align: top; }
+  td:first-child { white-space: nowrap; color: var(--dim); width: 1%; padding-right: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>WallTabletSuite <small id="ver"></small></h1>
+
+  <section>
+    <h2>Sperre</h2>
+    <div class="row">
+      <button id="lockbtn" onclick="toggleLock()">…</button>
+      <span class="dim" id="kiosk"></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Tabs</h2>
+    <div id="tabs"></div>
+    <div class="row">
+      <button onclick="addTab()">+ Tab</button>
+      <button class="primary" onclick="saveTabs()">Speichern</button>
+    </div>
+    <div class="msg" id="tabsmsg"></div>
+  </section>
+
+  <section>
+    <h2>Kamera (ONVIF / RTSP)</h2>
+    <label class="check"><input type="checkbox" id="cam_enabled">Kamera streamen</label>
+    <div class="grid">
+      <div><label>Name (so erscheint sie im NVR)</label><input id="cam_name"></div>
+      <div><label>Quelle</label>
+        <select id="cam_source" onchange="camSourceUi()">
+          <option value="libcamera">libcamera (Front-Kamera MIIX)</option>
+          <option value="v4l2">V4L2 / USB-Kamera</option>
+          <option value="custom">Eigene GStreamer-Quelle</option>
+        </select></div>
+      <div id="dev_box"><label>Gerät</label><input id="cam_device" placeholder="/dev/video0"></div>
+      <div><label>Encoder</label>
+        <select id="cam_encoder">
+          <option value="va">Hardware (VA-API)</option>
+          <option value="x264">Software (x264)</option>
+        </select></div>
+      <div><label>Breite</label><input id="cam_width" type="number"></div>
+      <div><label>Höhe</label><input id="cam_height" type="number"></div>
+      <div><label>Bilder/s</label><input id="cam_fps" type="number"></div>
+      <div><label>Bitrate (kbit/s)</label><input id="cam_bitrate" type="number"></div>
+    </div>
+    <div id="custom_box"><label>Eigene Quelle (gst-launch-Syntax bis Rohbild, z. B. <code>libcamerasrc camera-name=…</code>)</label><input id="cam_custom_source"></div>
+    <div class="row" style="margin-top:12px">
+      <button class="primary" onclick="saveCamera()">Speichern &amp; neu starten</button>
+      <span class="dim" id="camstate"></span>
+    </div>
+    <div class="msg" id="cammsg"></div>
+    <table style="margin-top:8px">
+      <tr><td>RTSP</td><td><code id="rtsp"></code></td></tr>
+      <tr><td>ONVIF</td><td><code id="onvifurl"></code> <span class="dim">(im UniFi Protect unter „Drittanbieter-Kameras“ hinzufügen, Benutzer/Passwort beliebig)</span></td></tr>
+    </table>
+    <pre id="camlog"></pre>
+  </section>
+
+  <section>
+    <h2>Update</h2>
+    <div class="grid">
+      <div style="grid-column: span 2"><label>Git-Repo</label><input id="up_repo"></div>
+      <div><label>Branch</label><input id="up_branch"></div>
+    </div>
+    <label class="check" style="margin-top:10px"><input type="checkbox" id="up_auto">Automatisch installieren (Prüfung alle 6 h)</label>
+    <div class="row" style="margin-top:12px">
+      <button onclick="saveUpdate()">Speichern</button>
+      <button onclick="checkUpdate()" id="checkbtn">Nach Updates suchen</button>
+      <button class="primary" onclick="installUpdate()" id="installbtn" disabled>Installieren</button>
+    </div>
+    <div class="msg" id="upmsg"></div>
+    <div class="dim" id="upinfo"></div>
+    <pre id="uplog"></pre>
+  </section>
+
+  <section>
+    <h2>API (ohne Login)</h2>
+    <table id="api"></table>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let state = null, tabs = [];
+
+async function api(path, body) {
+  const opts = body === undefined ? {} : { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) };
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || 'HTTP ' + r.status);
+  return data;
+}
+function msg(id, text, ok) { $(id).textContent = text; $(id).className = 'msg ' + (ok ? 'ok' : 'err'); }
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+// ----- tabs -----
+function renderTabs() {
+  $('tabs').innerHTML = tabs.map((t, i) => `
+    <div class="tab">
+      <input placeholder="Name" value="${esc(t.name)}" oninput="tabs[${i}].name=this.value">
+      <input placeholder="http://…" value="${esc(t.url)}" oninput="tabs[${i}].url=this.value">
+      <div class="btns">
+        <button title="nach oben" onclick="moveTab(${i},-1)" ${i ? '' : 'disabled'}>↑</button>
+        <button title="nach unten" onclick="moveTab(${i},1)" ${i < tabs.length - 1 ? '' : 'disabled'}>↓</button>
+        <button title="löschen" onclick="tabs.splice(${i},1);renderTabs()">✕</button>
+      </div>
+    </div>`).join('') || '<p class="dim">Keine Tabs.</p>';
+}
+function addTab() { tabs.push({name: '', url: 'http://'}); renderTabs(); }
+function moveTab(i, d) { [tabs[i], tabs[i + d]] = [tabs[i + d], tabs[i]]; renderTabs(); }
+async function saveTabs() {
+  try { await api('/api/config', {tabs}); msg('tabsmsg', 'Gespeichert, der Kiosk übernimmt es sofort.', true); }
+  catch (e) { msg('tabsmsg', e.message); }
+}
+
+// ----- camera -----
+const CAM = ['name', 'source', 'device', 'encoder', 'width', 'height', 'fps', 'bitrate', 'custom_source'];
+function fillCamera(c) {
+  $('cam_enabled').checked = c.enabled;
+  CAM.forEach(k => $('cam_' + k).value = c[k]);
+  camSourceUi();
+}
+function camSourceUi() {
+  const s = $('cam_source').value;
+  $('dev_box').style.display = s === 'v4l2' ? '' : 'none';
+  $('custom_box').style.display = s === 'custom' ? '' : 'none';
+}
+async function saveCamera() {
+  const camera = {enabled: $('cam_enabled').checked};
+  CAM.forEach(k => camera[k] = $('cam_' + k).value);
+  try { await api('/api/config', {camera}); msg('cammsg', 'Gespeichert.', true); refresh(); }
+  catch (e) { msg('cammsg', e.message); }
+}
+
+// ----- update -----
+function fillUpdate(u) { $('up_repo').value = u.repo; $('up_branch').value = u.branch; $('up_auto').checked = u.auto; }
+async function saveUpdate() {
+  try { await api('/api/config', {update: {repo: $('up_repo').value, branch: $('up_branch').value, auto: $('up_auto').checked}}); msg('upmsg', 'Gespeichert.', true); }
+  catch (e) { msg('upmsg', e.message); }
+}
+async function checkUpdate() {
+  $('checkbtn').disabled = true; msg('upmsg', 'Suche …', true);
+  try { await saveUpdate(); const i = await api('/api/update/check', {}); msg('upmsg', i.error ? i.error : (i.behind ? `${i.behind} neue Änderung(en)` : 'Aktuell.'), !i.error); refresh(); }
+  catch (e) { msg('upmsg', e.message); }
+  $('checkbtn').disabled = false;
+}
+async function installUpdate() {
+  if (!confirm('Update installieren? Server und Kiosk starten dabei neu.')) return;
+  try { await api('/api/update/install', {}); msg('upmsg', 'Update läuft, Fortschritt im Log unten.', true); }
+  catch (e) { msg('upmsg', e.message); }
+}
+
+// ----- lock -----
+async function toggleLock() {
+  try { await api('/api/lock', {locked: !state.config.locked}); refresh(); } catch (e) { alert(e.message); }
+}
+
+// ----- status -----
+async function refresh() {
+  try { state = await api('/api/config'); } catch (e) { $('kiosk').textContent = 'Server nicht erreichbar'; return; }
+  const s = state, locked = s.config.locked;
+  $('ver').textContent = `Version ${s.version} · ${s.commit}`;
+  $('lockbtn').textContent = locked ? '🔒 Gesperrt – entsperren' : '🔓 Entsperrt – sperren';
+  $('lockbtn').className = locked ? 'locked' : 'unlocked';
+  $('kiosk').textContent = s.kiosk.online ? `Kiosk online${s.kiosk.tab ? ', Tab „' + s.kiosk.tab + '“' : ''}` : 'Kiosk offline';
+  const c = s.camera;
+  $('camstate').textContent = !s.config.camera.enabled ? 'aus' : c.running ? `läuft, ${c.clients} Client(s)` : 'läuft nicht – siehe Log';
+  $('rtsp').textContent = c.rtsp; $('onvifurl').textContent = c.onvif;
+  $('camlog').textContent = c.log.join('\n') || '(noch keine Meldungen)';
+  const u = s.update;
+  $('installbtn').disabled = !(u.behind > 0);
+  $('upinfo').innerHTML = u.checked
+    ? `Zuletzt geprüft ${new Date(u.checked * 1000).toLocaleString('de-DE')}` +
+      (u.behind ? ` · verfügbar: ${esc(u.remote_version)} (${esc(u.remote_commit)})<br>` + u.changes.map(esc).join('<br>') : '')
+    : 'Noch nicht geprüft.';
+  $('uplog').textContent = u.log.join('\n') || '(kein Update-Log)';
+}
+
+function renderApi() {
+  const base = location.origin;
+  const rows = [
+    ['GET', '/api/lock', 'sperren'],
+    ['GET', '/api/unlock', 'entsperren'],
+    ['POST', '/api/lock', 'Body {"locked": true|false}'],
+    ['GET', '/api/status', 'Status (Plintus-Vertrag): version, locked, devices'],
+    ['GET', '/api/config', 'komplette Konfiguration und Laufzeitstatus'],
+    ['POST', '/api/config', 'Teil-Konfiguration: {"tabs": [...]}, {"camera": {...}}, {"update": {...}}'],
+  ];
+  $('api').innerHTML = rows.map(([m, p, d]) => `<tr><td>${m}</td><td><code>${base}${p}</code><br><span class="dim">${esc(d)}</span></td></tr>`).join('');
+}
+
+(async () => {
+  renderApi();
+  await refresh();
+  if (state) { tabs = state.config.tabs.map(t => ({...t})); renderTabs(); fillCamera(state.config.camera); fillUpdate(state.config.update); }
+  setInterval(refresh, 3000);
+})();
+</script>
+</body>
+</html>

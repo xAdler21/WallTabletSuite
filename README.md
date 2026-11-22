@@ -4,7 +4,7 @@
 
 | Teil | Datei | Was es tut |
 |---|---|---|
-| Server | [`app/server.py`](app/server.py) | Web-Panel und API auf Port **8447** (auch 80), Konfiguration, Sperre, Updates, startet die Kamera |
+| Server | [`app/server.py`](app/server.py) | Web-Panel und API auf Port **80** (auch 8447 für Plintus), Konfiguration, Sperre, Updates, startet die Kamera |
 | Kiosk | [`app/kiosk.py`](app/kiosk.py) | Vollbild unter [cage](https://github.com/cage-kiosk/cage): Tab-Leiste links, ein WebKit-View pro Tab (läuft beim Wechsel weiter), Sperrbild |
 | Kamera | [`app/camera.py`](app/camera.py) | GStreamer-RTSP-Server `rtsp://<ip>:8554/stream`, H.264 per VA-API oder x264 |
 | ONVIF | [`app/onvif.py`](app/onvif.py) | WS-Discovery und die Device/Media-Aufrufe, mit denen der NVR die Kamera findet |
@@ -21,9 +21,18 @@ sudo git clone https://github.com/xAdler21/WallTabletSuite.git /opt/walltablet
 sudo bash /opt/walltablet/deploy/install.sh
 ```
 
-Das Skript installiert die Pakete und legt den Benutzer `kiosk` an. Es richtet drei systemd-Units ein: `wts-server`, `wts-kiosk` (cage auf tty1) und `wts-update`. Danach `http://<tablet>:8447` öffnen.
+Das Skript installiert die Pakete und legt den Benutzer `kiosk` an. Es richtet drei systemd-Units ein: `wts-server`, `wts-kiosk` (cage auf tty1) und `wts-update`. Am Ende startet das Tablet neu, danach läuft der Kiosk. Web-Panel: `http://<tablet>/`.
 
 Home Assistant einmal im Kiosk anmelden (Tastatur-Cover des MIIX). Die Anmeldung bleibt gespeichert.
+
+**Raus aus dem Kiosk** (USB- oder Cover-Tastatur): `Strg+Alt+F2` öffnet eine Text-Anmeldung, `Strg+Alt+F1` geht zurück zum Kiosk. Klappt auch, wenn der Bildschirm schwarz ist. Alternativ per SSH, falls `openssh-server` installiert ist.
+
+Neue Version von Hand einspielen (z. B. wenn das Panel nicht erreichbar ist):
+
+```bash
+sudo git -c safe.directory=/opt/walltablet -C /opt/walltablet pull
+sudo bash /opt/walltablet/deploy/install.sh
+```
 
 ## Sperre
 
@@ -41,9 +50,9 @@ Beispiel für Home Assistant:
 ```yaml
 rest_command:
   wandtablet_sperren:
-    url: http://wandtablet:8447/api/lock
+    url: http://wandtablet/api/lock
   wandtablet_entsperren:
-    url: http://wandtablet:8447/api/unlock
+    url: http://wandtablet/api/unlock
 ```
 
 In **Plintus** unter Einstellungen → Wall-Tablet-Suite die Adresse des Tablets eintragen. Dann erscheint es in der Dienst-Matrix und lässt sich in der App sperren.

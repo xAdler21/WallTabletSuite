@@ -124,7 +124,7 @@ class Kiosk(Gtk.Application):
                 box.remove(child)
                 child = nxt
         self.tabs, self.views, self.buttons = tabs, [], []
-        self.empty = Gtk.Label(label=f"Keine Tabs eingerichtet.\nWeb-Panel: http://{local_ip()}:8447",
+        self.empty = Gtk.Label(label=f"Keine Tabs eingerichtet.\nWeb-Panel: http://{local_ip()}/",
                                css_classes=["empty"], justify=Gtk.Justification.CENTER)
         self.stack.add_named(self.empty, "empty")
         for i, tab in enumerate(tabs):

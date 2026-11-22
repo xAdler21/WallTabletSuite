@@ -39,14 +39,18 @@ EOF
 chmod 440 /etc/sudoers.d/walltablet
 visudo -cf /etc/sudoers.d/walltablet
 
-# the kiosk owns tty1; a desktop login manager would fight over the screen
-for dm in gdm3 gdm sddm lightdm; do systemctl disable --now "$dm" 2>/dev/null || true; done
-systemctl set-default graphical.target
 systemctl daemon-reload
 systemctl enable wts-server.service wts-kiosk.service
-systemctl restart wts-server.service wts-kiosk.service
+systemctl restart wts-server.service
+# the kiosk owns tty1, a desktop login manager would fight over the screen. Disabled without --now:
+# stopping it would also end the desktop terminal this script may run in, before the reboot below
+for dm in gdm3 gdm sddm lightdm; do systemctl disable "$dm" 2>/dev/null || true; done
+systemctl set-default graphical.target
 
 ip=$(hostname -I | awk '{print $1}')
 echo
-echo "Fertig. Web-Panel: http://$ip:8447"
+echo "Fertig. Web-Panel: http://$ip/"
 echo "Kamera: im Panel einschalten, dann in UniFi Protect als ONVIF-Kamera hinzufügen."
+echo "Neustart in 10 s, danach läuft der Kiosk auf dem Bildschirm (Strg+C bricht den Neustart ab)."
+sleep 10
+systemctl reboot

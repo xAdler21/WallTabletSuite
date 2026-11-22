@@ -13,16 +13,26 @@ USER_NAME=kiosk
 echo "== Pakete"
 apt-get update
 apt-get install -y --no-install-recommends \
-  git curl python3 python3-gi gir1.2-gtk-4.0 gir1.2-webkit-6.0 cage fonts-noto-color-emoji \
+  git curl python3 python3-gi gir1.2-gtk-4.0 gir1.2-webkit-6.0 cage wlr-randr fonts-noto-color-emoji \
   gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-  gstreamer1.0-plugins-ugly gstreamer1.0-libcamera gir1.2-gst-rtsp-server-1.0 libcamera-tools
+  gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-alsa gstreamer1.0-libcamera \
+  gir1.2-gst-rtsp-server-1.0 libcamera-tools alsa-utils
 # H.264 encoding in hardware on Kaby Lake; the non-free driver (multiverse) has the encoder kernels
 apt-get install -y intel-media-va-driver-non-free || apt-get install -y intel-media-va-driver || true
 
 echo "== Benutzer $USER_NAME"
 id "$USER_NAME" >/dev/null 2>&1 || useradd -m -s /bin/bash "$USER_NAME"
-usermod -aG video,render,input "$USER_NAME"
+usermod -aG video,render,input,audio "$USER_NAME"
 chown -R "$USER_NAME:" "$DIR"
+
+echo "== Touch folgt der Bildschirmdrehung"
+# without an output, wlroots maps touch to the whole layout and ignores the rotation (WL_OUTPUT = internal panel)
+cat >/etc/udev/rules.d/90-walltablet-touch.rules <<'EOF'
+ENV{ID_INPUT_TOUCHSCREEN}=="1", ENV{WL_OUTPUT}="eDP-1"
+ENV{ID_INPUT_TABLET}=="1", ENV{WL_OUTPUT}="eDP-1"
+EOF
+udevadm control --reload
+udevadm trigger --subsystem-match=input || true
 
 echo "== systemd"
 install -m 644 "$DIR"/deploy/wts-*.service /etc/systemd/system/

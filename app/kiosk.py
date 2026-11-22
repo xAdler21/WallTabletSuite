@@ -7,6 +7,7 @@ the server restarts.
 import json
 import os
 import socket
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -49,6 +50,32 @@ HA_LOGIN = """(function () {
   if (stored && stored.refresh_token === tokens.refresh_token) return;
   try { localStorage.setItem("hassTokens", JSON.stringify(tokens)); } catch (e) {}
 })();"""
+
+# Light/dark for the HA frontend: its browser setting in localStorage.selectedTheme, the theme name is kept
+HA_THEME = """(function () {
+  var dark = %s;  // true, false or null = let HA decide
+  var s = {};
+  try { s = JSON.parse(localStorage.getItem("selectedTheme")) || {}; } catch (e) {}
+  if (!s.theme) s.theme = "default";
+  if (dark === null) delete s.dark; else s.dark = dark;
+  try { localStorage.setItem("selectedTheme", JSON.stringify(s)); } catch (e) {}
+})();"""
+
+
+def rotate(degrees):
+    """Turns every screen output via the compositor (cage); returns an error text or ''."""
+    try:
+        listing = subprocess.run(["wlr-randr"], capture_output=True, text=True, timeout=5, check=True).stdout
+        for name in [line.split()[0] for line in listing.splitlines() if line and not line[0].isspace()]:
+            subprocess.run(["wlr-randr", "--output", name, "--transform", str(degrees) if degrees else "normal"],
+                           capture_output=True, text=True, timeout=5, check=True)
+        return ""
+    except FileNotFoundError:
+        return "Drehen: wlr-randr fehlt, install.sh erneut ausführen"
+    except subprocess.CalledProcessError as e:
+        return f"Drehen: {(e.stderr or '').strip()[:200] or e}"
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"Drehen: {e}"
 
 
 def local_ip():
@@ -111,11 +138,17 @@ class Kiosk(Gtk.Application):
         return True
 
     def poll(self):
+        rotation, error = None, ""
         while True:
             try:
-                url = f"{SERVER}/api/kiosk?tab={urllib.parse.quote(self.current_name)}"
-                with urllib.request.urlopen(url, timeout=3) as r:
+                query = urllib.parse.urlencode({"tab": self.current_name, "error": error})
+                with urllib.request.urlopen(f"{SERVER}/api/kiosk?{query}", timeout=3) as r:
                     data = json.load(r)
+                if data.get("rotation", 0) != rotation:  # here, not in apply(): wlr-randr must not block the UI
+                    rotation = data.get("rotation", 0)
+                    error = rotate(rotation)
+                    if error:
+                        print(error, flush=True)
                 GLib.idle_add(self.apply, data)
             except Exception:
                 pass  # server restarting: keep the last state (also the lock)
@@ -143,10 +176,14 @@ class Kiosk(Gtk.Application):
         self.stack.add_named(self.empty, "empty")
         for i, tab in enumerate(tabs):
             scripts = WebKit.UserContentManager()
+            code = []
             if tab.get("ha_tokens"):
-                scripts.add_script(WebKit.UserScript.new(
-                    HA_LOGIN % json.dumps(tab["ha_tokens"]), WebKit.UserContentInjectedFrames.TOP_FRAME,
-                    WebKit.UserScriptInjectionTime.START, None, None))
+                code.append(HA_LOGIN % json.dumps(tab["ha_tokens"]))
+            if tab.get("ha_theme"):
+                code.append(HA_THEME % json.dumps({"dark": True, "light": False}.get(tab["ha_theme"])))
+            for js in code:
+                scripts.add_script(WebKit.UserScript.new(js, WebKit.UserContentInjectedFrames.TOP_FRAME,
+                                                         WebKit.UserScriptInjectionTime.START, None, None))
             view = WebKit.WebView(network_session=self.session, user_content_manager=scripts,
                                   website_policies=WebKit.WebsitePolicies(autoplay=WebKit.AutoplayPolicy.ALLOW))
             view.connect("load-failed", self.on_load_failed)

@@ -1,5 +1,6 @@
-"""Minimal ONVIF Profile S device: WS-Discovery plus the Device and Media (ver10) calls an NVR needs
-to find the camera and fetch its RTSP stream. Authentication headers are ignored (local network only).
+"""Minimal ONVIF Profile S device: WS-Discovery plus the Device and Media (ver10) calls an NVR needs to
+find the camera, pick its streams (main and sub), audio and snapshot. Authentication headers are ignored
+(local network only). Also holds the stream sizes camera.py uses, so both always agree.
 """
 import re
 import socket
@@ -13,12 +14,29 @@ from xml.sax.saxutils import escape
 MAC = uuid.getnode()
 DEVICE_UUID = uuid.uuid5(uuid.NAMESPACE_DNS, f"walltablet-{MAC:012x}")
 MCAST = ("239.255.255.250", 3702)
+SNAPSHOT = "/dev/shm/walltablet-snapshot.jpg"  # written by camera.py once a second, served by server.py
+AUDIO_RATE = 16000
+H264_PROFILES = {"main": "Main", "high": "High", "constrained-baseline": "Baseline"}
 
 NS = ('xmlns:s="http://www.w3.org/2003/05/soap-envelope" '
       'xmlns:tds="http://www.onvif.org/ver10/device/wsdl" '
       'xmlns:trt="http://www.onvif.org/ver10/media/wsdl" '
       'xmlns:tt="http://www.onvif.org/ver10/schema" '
       'xmlns:ter="http://www.onvif.org/ver10/error"')
+
+
+def size(c, sub=False):
+    """Output size of a stream: rotating by 90/270 degrees swaps width and height."""
+    w, h = (c["sub_width"], c["sub_height"]) if sub else (c["width"], c["height"])
+    return (h, w) if c["rotate"] in ("90", "270") else (w, h)
+
+
+def streams(c):
+    """[(profile token, encoder token, RTSP path, width, height, kbit/s)]"""
+    out = [("main", "vec", "stream", *size(c), c["bitrate"])]
+    if c["sub_enabled"]:
+        out.append(("sub", "vec_sub", "sub", *size(c, sub=True), c["sub_bitrate"]))
+    return out
 
 
 def envelope(body):
@@ -36,36 +54,65 @@ def mac_str():
 
 def scopes(ctx):
     name = quote(ctx["camera"]["name"])
-    return ("onvif://www.onvif.org/type/video_encoder onvif://www.onvif.org/Profile/Streaming "
-            f"onvif://www.onvif.org/name/{name} onvif://www.onvif.org/hardware/WallTablet")
+    return ("onvif://www.onvif.org/type/video_encoder onvif://www.onvif.org/type/audio_encoder "
+            f"onvif://www.onvif.org/Profile/Streaming onvif://www.onvif.org/name/{name} "
+            "onvif://www.onvif.org/hardware/WallTablet")
+
+
+MULTICAST = ('<tt:Multicast><tt:Address><tt:Type>IPv4</tt:Type><tt:IPv4Address>0.0.0.0</tt:IPv4Address></tt:Address>'
+             '<tt:Port>0</tt:Port><tt:TTL>1</tt:TTL><tt:AutoStart>false</tt:AutoStart></tt:Multicast>'
+             '<tt:SessionTimeout>PT60S</tt:SessionTimeout>')
 
 
 def video_source_cfg(c):
-    return (f'<tt:Name>vsc</tt:Name><tt:UseCount>1</tt:UseCount><tt:SourceToken>vs</tt:SourceToken>'
-            f'<tt:Bounds x="0" y="0" width="{c["width"]}" height="{c["height"]}"/>')
+    w, h = size(c)
+    return (f'<tt:Name>vsc</tt:Name><tt:UseCount>{len(streams(c))}</tt:UseCount><tt:SourceToken>vs</tt:SourceToken>'
+            f'<tt:Bounds x="0" y="0" width="{w}" height="{h}"/>')
 
 
-def encoder_cfg(c):
-    return (f'<tt:Name>vec</tt:Name><tt:UseCount>1</tt:UseCount><tt:Encoding>H264</tt:Encoding>'
-            f'<tt:Resolution><tt:Width>{c["width"]}</tt:Width><tt:Height>{c["height"]}</tt:Height></tt:Resolution>'
+def encoder_cfg(c, stream):
+    _, token, _, w, h, kbit = stream
+    return (f'<tt:Name>{token}</tt:Name><tt:UseCount>1</tt:UseCount><tt:Encoding>H264</tt:Encoding>'
+            f'<tt:Resolution><tt:Width>{w}</tt:Width><tt:Height>{h}</tt:Height></tt:Resolution>'
             f'<tt:Quality>5</tt:Quality><tt:RateControl><tt:FrameRateLimit>{c["fps"]}</tt:FrameRateLimit>'
-            f'<tt:EncodingInterval>1</tt:EncodingInterval><tt:BitrateLimit>{c["bitrate"]}</tt:BitrateLimit></tt:RateControl>'
-            f'<tt:H264><tt:GovLength>{c["fps"] * 2}</tt:GovLength><tt:H264Profile>Main</tt:H264Profile></tt:H264>'
-            '<tt:Multicast><tt:Address><tt:Type>IPv4</tt:Type><tt:IPv4Address>0.0.0.0</tt:IPv4Address></tt:Address>'
-            '<tt:Port>0</tt:Port><tt:TTL>1</tt:TTL><tt:AutoStart>false</tt:AutoStart></tt:Multicast>'
-            '<tt:SessionTimeout>PT60S</tt:SessionTimeout>')
+            f'<tt:EncodingInterval>1</tt:EncodingInterval><tt:BitrateLimit>{kbit}</tt:BitrateLimit></tt:RateControl>'
+            f'<tt:H264><tt:GovLength>{c["fps"] * c["gop"]}</tt:GovLength>'
+            f'<tt:H264Profile>{H264_PROFILES[c["profile"]]}</tt:H264Profile></tt:H264>{MULTICAST}')
 
 
-def profile(c, tag):
-    return (f'<trt:{tag} token="main" fixed="true"><tt:Name>main</tt:Name>'
+AUDIO_SOURCE_CFG = '<tt:Name>asc</tt:Name><tt:UseCount>1</tt:UseCount><tt:SourceToken>as</tt:SourceToken>'
+AUDIO_ENCODER_CFG = (f'<tt:Name>aec</tt:Name><tt:UseCount>1</tt:UseCount><tt:Encoding>AAC</tt:Encoding>'
+                     f'<tt:Bitrate>64</tt:Bitrate><tt:SampleRate>{AUDIO_RATE // 1000}</tt:SampleRate>{MULTICAST}')
+
+
+def profile(c, tag, stream):
+    token = stream[0]
+    audio = c["audio_enabled"] and token == "main"  # audio rides on the main stream only
+    return (f'<trt:{tag} token="{token}" fixed="true"><tt:Name>{token}</tt:Name>'
             f'<tt:VideoSourceConfiguration token="vsc">{video_source_cfg(c)}</tt:VideoSourceConfiguration>'
-            f'<tt:VideoEncoderConfiguration token="vec">{encoder_cfg(c)}</tt:VideoEncoderConfiguration>'
-            f'</trt:{tag}>')
+            + (f'<tt:AudioSourceConfiguration token="asc">{AUDIO_SOURCE_CFG}</tt:AudioSourceConfiguration>' if audio else '')
+            + f'<tt:VideoEncoderConfiguration token="{stream[1]}">{encoder_cfg(c, stream)}</tt:VideoEncoderConfiguration>'
+            + (f'<tt:AudioEncoderConfiguration token="aec">{AUDIO_ENCODER_CFG}</tt:AudioEncoderConfiguration>' if audio else '')
+            + f'</trt:{tag}>')
 
 
-def responses(action, ctx):
+def arg(req, name):
+    """Text of the first element called name in the request, e.g. ProfileToken."""
+    return next((e.text.strip() for e in req.iter() if e.tag.rsplit("}", 1)[-1] == name and e.text), None)
+
+
+def media_uri(uri):
+    return (f'<trt:MediaUri><tt:Uri>{escape(uri)}</tt:Uri><tt:InvalidAfterConnect>false</tt:InvalidAfterConnect>'
+            '<tt:InvalidAfterReboot>false</tt:InvalidAfterReboot><tt:Timeout>PT0S</tt:Timeout></trt:MediaUri>')
+
+
+def responses(action, ctx, req):
     c, base = ctx["camera"], f'http://{ctx["ip"]}:{ctx["port"]}/onvif'
     version = '<tt:Major>2</tt:Major><tt:Minor>5</tt:Minor>'
+    all_streams = streams(c)
+    # unknown or missing tokens get the main stream: lenient for NVRs that skip them
+    by_profile = next((s for s in all_streams if s[0] == arg(req, "ProfileToken")), all_streams[0])
+    by_encoder = next((s for s in all_streams if s[1] == arg(req, "ConfigurationToken")), all_streams[0])
     if action == "GetSystemDateAndTime":
         t = time.gmtime()
         return ('<tds:GetSystemDateAndTimeResponse><tds:SystemDateAndTime><tt:DateTimeType>NTP</tt:DateTimeType>'
@@ -105,26 +152,50 @@ def responses(action, ctx):
                 f'<tt:Address>{ctx["ip"]}</tt:Address><tt:PrefixLength>24</tt:PrefixLength></tt:FromDHCP>'
                 '<tt:DHCP>true</tt:DHCP></tt:Config></tt:IPv4></tds:NetworkInterfaces></tds:GetNetworkInterfacesResponse>')
     if action == "GetProfiles":
-        return f'<trt:GetProfilesResponse>{profile(c, "Profiles")}</trt:GetProfilesResponse>'
+        return f'<trt:GetProfilesResponse>{"".join(profile(c, "Profiles", s) for s in all_streams)}</trt:GetProfilesResponse>'
     if action == "GetProfile":
-        return f'<trt:GetProfileResponse>{profile(c, "Profile")}</trt:GetProfileResponse>'
+        return f'<trt:GetProfileResponse>{profile(c, "Profile", by_profile)}</trt:GetProfileResponse>'
     if action == "GetStreamUri":
-        return (f'<trt:GetStreamUriResponse><trt:MediaUri><tt:Uri>rtsp://{ctx["ip"]}:{ctx["rtsp_port"]}/stream</tt:Uri>'
-                '<tt:InvalidAfterConnect>false</tt:InvalidAfterConnect><tt:InvalidAfterReboot>false</tt:InvalidAfterReboot>'
-                '<tt:Timeout>PT0S</tt:Timeout></trt:MediaUri></trt:GetStreamUriResponse>')
+        uri = f'rtsp://{ctx["ip"]}:{ctx["rtsp_port"]}/{by_profile[2]}'
+        return f'<trt:GetStreamUriResponse>{media_uri(uri)}</trt:GetStreamUriResponse>'
+    if action == "GetSnapshotUri":
+        uri = f'http://{ctx["ip"]}:{ctx["port"]}/snapshot.jpg'
+        return f'<trt:GetSnapshotUriResponse>{media_uri(uri)}</trt:GetSnapshotUriResponse>'
     if action == "GetVideoSources":
+        w, h = size(c)
         return (f'<trt:GetVideoSourcesResponse><trt:VideoSources token="vs"><tt:Framerate>{c["fps"]}</tt:Framerate>'
-                f'<tt:Resolution><tt:Width>{c["width"]}</tt:Width><tt:Height>{c["height"]}</tt:Height></tt:Resolution>'
+                f'<tt:Resolution><tt:Width>{w}</tt:Width><tt:Height>{h}</tt:Height></tt:Resolution>'
                 '</trt:VideoSources></trt:GetVideoSourcesResponse>')
     if action == "GetVideoSourceConfigurations":
         return (f'<trt:GetVideoSourceConfigurationsResponse><trt:Configurations token="vsc">{video_source_cfg(c)}'
                 '</trt:Configurations></trt:GetVideoSourceConfigurationsResponse>')
     if action == "GetVideoEncoderConfigurations":
-        return (f'<trt:GetVideoEncoderConfigurationsResponse><trt:Configurations token="vec">{encoder_cfg(c)}'
-                '</trt:Configurations></trt:GetVideoEncoderConfigurationsResponse>')
+        items = ''.join(f'<trt:Configurations token="{s[1]}">{encoder_cfg(c, s)}</trt:Configurations>' for s in all_streams)
+        return f'<trt:GetVideoEncoderConfigurationsResponse>{items}</trt:GetVideoEncoderConfigurationsResponse>'
     if action == "GetVideoEncoderConfiguration":
-        return (f'<trt:GetVideoEncoderConfigurationResponse><trt:Configuration token="vec">{encoder_cfg(c)}'
-                '</trt:Configuration></trt:GetVideoEncoderConfigurationResponse>')
+        return (f'<trt:GetVideoEncoderConfigurationResponse><trt:Configuration token="{by_encoder[1]}">'
+                f'{encoder_cfg(c, by_encoder)}</trt:Configuration></trt:GetVideoEncoderConfigurationResponse>')
+    if action == "GetVideoEncoderConfigurationOptions":
+        s = by_encoder if arg(req, "ConfigurationToken") else by_profile
+        return ('<trt:GetVideoEncoderConfigurationOptionsResponse><trt:Options>'
+                '<tt:QualityRange><tt:Min>0</tt:Min><tt:Max>10</tt:Max></tt:QualityRange><tt:H264>'
+                f'<tt:ResolutionsAvailable><tt:Width>{s[3]}</tt:Width><tt:Height>{s[4]}</tt:Height></tt:ResolutionsAvailable>'
+                '<tt:GovLengthRange><tt:Min>1</tt:Min><tt:Max>600</tt:Max></tt:GovLengthRange>'
+                '<tt:FrameRateRange><tt:Min>1</tt:Min><tt:Max>60</tt:Max></tt:FrameRateRange>'
+                '<tt:EncodingIntervalRange><tt:Min>1</tt:Min><tt:Max>1</tt:Max></tt:EncodingIntervalRange>'
+                f'<tt:H264ProfilesSupported>{H264_PROFILES[c["profile"]]}</tt:H264ProfilesSupported>'
+                '</tt:H264></trt:Options></trt:GetVideoEncoderConfigurationOptionsResponse>')
+    if action == "GetAudioSources":
+        items = '<trt:AudioSources token="as"><tt:Channels>1</tt:Channels></trt:AudioSources>' if c["audio_enabled"] else ''
+        return f'<trt:GetAudioSourcesResponse>{items}</trt:GetAudioSourcesResponse>'
+    if action == "GetAudioSourceConfigurations":
+        items = (f'<trt:Configurations token="asc">{AUDIO_SOURCE_CFG}</trt:Configurations>'
+                 if c["audio_enabled"] else '')
+        return f'<trt:GetAudioSourceConfigurationsResponse>{items}</trt:GetAudioSourceConfigurationsResponse>'
+    if action == "GetAudioEncoderConfigurations":
+        items = (f'<trt:Configurations token="aec">{AUDIO_ENCODER_CFG}</trt:Configurations>'
+                 if c["audio_enabled"] else '')
+        return f'<trt:GetAudioEncoderConfigurationsResponse>{items}</trt:GetAudioEncoderConfigurationsResponse>'
     return None
 
 
@@ -134,10 +205,11 @@ def handle(body, ctx):
         return 503, fault("Receiver", "ActionNotSupported", "camera disabled")
     try:
         soap_body = next(e for e in ET.fromstring(body).iter() if e.tag.endswith("}Body"))
-        action = list(soap_body)[0].tag.rsplit("}", 1)[-1]
+        req = list(soap_body)[0]
     except (ET.ParseError, StopIteration, IndexError):
         return 400, fault("Sender", "WellFormed", "not a SOAP request")
-    xml = responses(action, ctx)
+    action = req.tag.rsplit("}", 1)[-1]
+    xml = responses(action, ctx, req)
     if xml is None:
         return 500, fault("Receiver", "ActionNotSupported", f"{action} not supported")
     return 200, envelope(xml)

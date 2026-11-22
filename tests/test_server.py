@@ -84,6 +84,69 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.json("/api/config", {"camera": {"fps": "20", "name": "Flur"}})[0], 200)
         self.assertEqual(server.cfg["camera"]["fps"], 20)
 
+    def soap(self, action, svc="media", inner=""):
+        body = (f'<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body>'
+                f'<{action} xmlns="http://www.onvif.org/ver10/{svc}/wsdl">{inner}</{action}></s:Body></s:Envelope>')
+        code, data = self.req(f"/onvif/{svc}_service", raw=body.encode())
+        self.assertEqual(code, 200, action)
+        root = ET.fromstring(data)
+        return root, lambda name: [e.text for e in root.iter() if e.tag.rsplit("}", 1)[-1] == name]
+
+    def test_onvif_streams_audio_snapshot(self):
+        cam = server.cfg["camera"]
+        old = dict(cam)
+        cam.update(enabled=True, rotate="90", sub_enabled=True, audio_enabled=True)
+        try:
+            root, texts = self.soap("GetProfiles")
+            self.assertEqual([p.get("token") for p in root.iter() if p.tag.endswith("}Profiles")], ["main", "sub"])
+            self.assertEqual(texts("Width")[:1], [str(cam["height"])])  # rotated: width and height swapped
+            self.assertEqual(texts("Encoding").count("AAC"), 1)  # audio only on main
+            _, texts = self.soap("GetStreamUri", inner="<ProfileToken>sub</ProfileToken>")
+            self.assertTrue(texts("Uri")[0].endswith(":8554/sub"))
+            _, texts = self.soap("GetStreamUri", inner="<ProfileToken>gibtsnicht</ProfileToken>")
+            self.assertTrue(texts("Uri")[0].endswith(":8554/stream"))
+            _, texts = self.soap("GetSnapshotUri", inner="<ProfileToken>main</ProfileToken>")
+            self.assertTrue(texts("Uri")[0].endswith("/snapshot.jpg"))
+            _, texts = self.soap("GetVideoEncoderConfiguration", inner="<ConfigurationToken>vec_sub</ConfigurationToken>")
+            self.assertEqual(texts("Width"), [str(cam["sub_height"])])
+            for action in ("GetAudioSources", "GetAudioSourceConfigurations", "GetAudioEncoderConfigurations",
+                           "GetVideoEncoderConfigurationOptions"):
+                self.soap(action)
+            cam.update(sub_enabled=False, audio_enabled=False)
+            root, texts = self.soap("GetProfiles")
+            self.assertEqual(len([p for p in root.iter() if p.tag.endswith("}Profiles")]), 1)
+            self.assertNotIn("AAC", texts("Encoding"))
+        finally:
+            cam.clear()
+            cam.update(old)
+
+    def test_camera_settings_validation(self):
+        for bad in ({"rotate": "45"}, {"profile": "extreme"}, {"gop": 0}, {"sub_width": 5000},
+                    {"audio_device": "hw:0 ! fakesink"}, {"controls": {"brightness": "hell"}},
+                    {"controls": {"Bad Name": 1}}, {"controls": [1]}):
+            self.assertEqual(self.json("/api/config", {"camera": bad})[0], 400, bad)
+        ok = {"rotate": "270", "profile": "high", "gop": 1, "camera_id": r"\_SB_.PCI0.LNK1",
+              "controls": {"brightness": 0.2, "ae-enable": False, "awb-mode": 3}}
+        self.assertEqual(self.json("/api/config", {"camera": ok})[0], 200)
+        for k, v in ok.items():
+            self.assertEqual(server.cfg["camera"][k], v)
+        self.assertEqual(self.req("/snapshot.jpg")[0], 503)  # no camera running
+
+    def test_rotation_and_ha_theme(self):
+        self.assertEqual(self.json("/api/config", {"rotation": 45})[0], 400)
+        self.assertEqual(self.json("/api/config", {"rotation": 90})[0], 200)
+        self.assertEqual(self.json("/api/config", {"ha": {"theme": "lila"}})[0], 400)
+        self.json("/api/config", {"tabs": [{"name": "HA", "url": "http://ha:8123/", "ha": True},
+                                           {"name": "Beamer", "url": "http://vm:8445/"}],
+                                  "ha": {"username": "kiosk", "password": "pw"}})
+        self.assertEqual(self.json("/api/config", {"ha": {"theme": "dark"}})[0], 200)
+        self.assertEqual(server.cfg["ha"]["username"], "kiosk")  # changing the theme keeps the login
+        data = self.json("/api/kiosk")[1]
+        self.assertEqual(data["rotation"], 90)
+        self.assertEqual(data["tabs"][0]["ha_theme"], "dark")
+        self.assertNotIn("ha_theme", data["tabs"][1])
+        self.json("/api/config", {"rotation": 0, "ha": {"username": "", "theme": "auto"}})
+
     def test_onvif(self):
         self.assertEqual(self.req("/onvif/media_service", raw=SOAP.format(a="GetProfiles", svc="media").encode())[0], 503)
         server.cfg["camera"]["enabled"] = True

@@ -35,6 +35,14 @@
   .msg { min-height: 20px; font-size: 13px; margin-top: 8px; }
   .err { color: #ff8a80; }
   .ok { color: #81c995; }
+  .ctl { display:grid; grid-template-columns: 170px 1fr 70px auto; gap:8px; align-items:center; margin:6px 0; }
+  .ctl span { font-size:13px; color:var(--dim); overflow:hidden; text-overflow:ellipsis; }
+  .ctl output { font-size:13px; text-align:right; }
+  .ctl button { padding:4px 8px; font-size:12px; }
+  input[type=range] { padding:0; }
+  @media (max-width: 600px) { .ctl { grid-template-columns: 1fr 70px auto; } .ctl span { grid-column: 1 / -1; } }
+  #preview { max-width:100%; max-height:360px; border-radius:8px; border:1px solid var(--line); display:none; margin-top:8px; }
+  h3 { font-size:14px; margin:18px 0 4px; color:var(--dim); font-weight:600; }
   pre { background:#0b0c0e; border:1px solid var(--line); border-radius:8px; padding:10px; font-size:12px; max-height:220px; overflow:auto; white-space:pre-wrap; word-break:break-all; margin: 8px 0 0; }
   code { background:#0b0c0e; padding:2px 6px; border-radius:6px; font-size:13px; word-break: break-all; }
   table { width:100%; border-collapse: collapse; font-size: 14px; }
@@ -55,6 +63,20 @@
   </section>
 
   <section>
+    <h2>Anzeige</h2>
+    <div class="grid">
+      <div><label>Bildschirm drehen</label>
+        <select id="rotation" onchange="saveRotation()">
+          <option value="0">0° (quer)</option>
+          <option value="90">90°</option>
+          <option value="180">180°</option>
+          <option value="270">270°</option>
+        </select></div>
+    </div>
+    <div class="msg" id="rotmsg"></div>
+  </section>
+
+  <section>
     <h2>Tabs</h2>
     <div id="tabs"></div>
     <div class="row">
@@ -70,6 +92,12 @@
     <div class="grid">
       <div><label>Benutzername</label><input id="ha_user" autocomplete="off"></div>
       <div><label>Passwort</label><input id="ha_pass" type="password" autocomplete="new-password"></div>
+      <div><label>Darstellung</label>
+        <select id="ha_theme" onchange="saveTheme()">
+          <option value="auto">wie in HA eingestellt</option>
+          <option value="light">Hell</option>
+          <option value="dark">Dunkel</option>
+        </select></div>
     </div>
     <div class="row" style="margin-top:12px">
       <button class="primary" onclick="saveHa()">Speichern</button>
@@ -85,29 +113,73 @@
       <div><label>Name (so erscheint sie im NVR)</label><input id="cam_name"></div>
       <div><label>Quelle</label>
         <select id="cam_source" onchange="camSourceUi()">
-          <option value="libcamera">libcamera (Front-Kamera MIIX)</option>
+          <option value="libcamera">libcamera (MIIX-Kameras)</option>
           <option value="v4l2">V4L2 / USB-Kamera</option>
           <option value="custom">Eigene GStreamer-Quelle</option>
         </select></div>
+      <div id="camid_box"><label>Kamera</label><select id="cam_camera_id"><option value="">erste gefundene</option></select></div>
       <div id="dev_box"><label>Gerät</label><input id="cam_device" placeholder="/dev/video0"></div>
+      <div><label>Bild drehen/spiegeln</label>
+        <select id="cam_rotate">
+          <option value="none">nicht drehen</option>
+          <option value="90">90° rechts</option>
+          <option value="180">180°</option>
+          <option value="270">90° links</option>
+          <option value="hflip">horizontal spiegeln</option>
+          <option value="vflip">vertikal spiegeln</option>
+        </select></div>
+    </div>
+    <div id="custom_box"><label>Eigene Quelle (gst-launch-Syntax bis Rohbild, z. B. <code>libcamerasrc camera-name=…</code>)</label><input id="cam_custom_source"></div>
+
+    <h3>Haupt-Stream</h3>
+    <div class="grid">
+      <div><label>Breite</label><input id="cam_width" type="number"></div>
+      <div><label>Höhe</label><input id="cam_height" type="number"></div>
+      <div><label>Bilder/s</label><input id="cam_fps" type="number"></div>
+      <div><label>Bitrate (kbit/s)</label><input id="cam_bitrate" type="number"></div>
+      <div><label>Keyframe alle … s</label><input id="cam_gop" type="number"></div>
       <div><label>Encoder</label>
         <select id="cam_encoder">
           <option value="va">Hardware (VA-API)</option>
           <option value="x264">Software (x264)</option>
         </select></div>
-      <div><label>Breite</label><input id="cam_width" type="number"></div>
-      <div><label>Höhe</label><input id="cam_height" type="number"></div>
-      <div><label>Bilder/s</label><input id="cam_fps" type="number"></div>
-      <div><label>Bitrate (kbit/s)</label><input id="cam_bitrate" type="number"></div>
+      <div><label>H.264-Profil</label>
+        <select id="cam_profile">
+          <option value="main">Main</option>
+          <option value="high">High</option>
+          <option value="constrained-baseline">Baseline</option>
+        </select></div>
     </div>
-    <div id="custom_box"><label>Eigene Quelle (gst-launch-Syntax bis Rohbild, z. B. <code>libcamerasrc camera-name=…</code>)</label><input id="cam_custom_source"></div>
+    <p class="dim">Breite/Höhe vor dem Drehen angeben, bei 90°/270° tauscht der Stream sie.</p>
+
+    <h3>Sub-Stream (klein, für Live-Ansicht in Protect)</h3>
+    <label class="check"><input type="checkbox" id="cam_sub_enabled">Sub-Stream anbieten</label>
+    <div class="grid">
+      <div><label>Breite</label><input id="cam_sub_width" type="number"></div>
+      <div><label>Höhe</label><input id="cam_sub_height" type="number"></div>
+      <div><label>Bitrate (kbit/s)</label><input id="cam_sub_bitrate" type="number"></div>
+    </div>
+
+    <h3>Ton</h3>
+    <label class="check"><input type="checkbox" id="cam_audio_enabled">Mikrofon mitsenden (AAC)</label>
+    <div class="grid">
+      <div><label>ALSA-Gerät</label><input id="cam_audio_device" placeholder="default"></div>
+    </div>
+    <p class="dim">Klappt <code>default</code> nicht, <code>plughw:0,0</code> probieren (Liste: <code>arecord -l</code>).</p>
+
     <div class="row" style="margin-top:12px">
       <button class="primary" onclick="saveCamera()">Speichern &amp; neu starten</button>
       <span class="dim" id="camstate"></span>
     </div>
     <div class="msg" id="cammsg"></div>
+
+    <h3>Bild-Regler <span class="dim" style="font-weight:400">(wirken sofort, ohne Neustart)</span></h3>
+    <div id="controls" class="dim">Lade …</div>
+    <img id="preview" alt="Kamerabild">
+
     <table style="margin-top:8px">
-      <tr><td>RTSP</td><td><code id="rtsp"></code></td></tr>
+      <tr><td>RTSP</td><td><code id="rtsp"></code><br><code id="rtsp_sub"></code></td></tr>
+      <tr><td>Snapshot</td><td><code id="snapurl"></code></td></tr>
       <tr><td>ONVIF</td><td><code id="onvifurl"></code> <span class="dim">(im UniFi Protect unter „Drittanbieter-Kameras“ hinzufügen, Benutzer/Passwort beliebig)</span></td></tr>
     </table>
     <pre id="camlog"></pre>
@@ -180,23 +252,103 @@ async function saveHa() {
   } catch (e) { msg('hamsg', e.message); }
 }
 
+// ----- display -----
+async function saveRotation() {
+  try { await api('/api/config', {rotation: Number($('rotation').value)}); msg('rotmsg', 'Gespeichert, der Kiosk dreht sich gleich.', true); }
+  catch (e) { msg('rotmsg', e.message); }
+}
+async function saveTheme() {
+  try { await api('/api/config', {ha: {theme: $('ha_theme').value}}); msg('hamsg', 'Darstellung gespeichert, HA lädt neu.', true); }
+  catch (e) { msg('hamsg', e.message); }
+}
+
 // ----- camera -----
-const CAM = ['name', 'source', 'device', 'encoder', 'width', 'height', 'fps', 'bitrate', 'custom_source'];
+const CAM = ['name', 'source', 'device', 'rotate', 'encoder', 'profile', 'width', 'height', 'fps', 'bitrate', 'gop',
+             'sub_width', 'sub_height', 'sub_bitrate', 'audio_device', 'custom_source'];
+const CAM_CHECKS = ['enabled', 'sub_enabled', 'audio_enabled'];
+let controls = {}, controlTimer = null;
 function fillCamera(c) {
-  $('cam_enabled').checked = c.enabled;
   CAM.forEach(k => $('cam_' + k).value = c[k]);
+  CAM_CHECKS.forEach(k => $('cam_' + k).checked = c[k]);
+  setCameraIds([], c.camera_id);
+  controls = {...c.controls};
   camSourceUi();
+}
+function setCameraIds(cameras, current) {
+  const ids = cameras.map(c => c.id);
+  if (current && !ids.includes(current)) cameras = [...cameras, {id: current, name: current}];
+  $('cam_camera_id').innerHTML = '<option value="">erste gefundene</option>' +
+    cameras.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+  $('cam_camera_id').value = current || '';
 }
 function camSourceUi() {
   const s = $('cam_source').value;
   $('dev_box').style.display = s === 'v4l2' ? '' : 'none';
   $('custom_box').style.display = s === 'custom' ? '' : 'none';
+  $('camid_box').style.display = s === 'libcamera' ? '' : 'none';
 }
 async function saveCamera() {
-  const camera = {enabled: $('cam_enabled').checked};
+  const camera = {camera_id: $('cam_camera_id').value, controls};
   CAM.forEach(k => camera[k] = $('cam_' + k).value);
-  try { await api('/api/config', {camera}); msg('cammsg', 'Gespeichert.', true); refresh(); }
+  CAM_CHECKS.forEach(k => camera[k] = $('cam_' + k).checked);
+  try { await api('/api/config', {camera}); msg('cammsg', 'Gespeichert, Kamera startet neu.', true); refresh(); setTimeout(loadControls, 8000); }
   catch (e) { msg('cammsg', e.message); }
+}
+
+// image controls: list from the camera (libcamera), sent live on change
+async function loadControls() {
+  let p;
+  try { p = await api('/api/camera/probe'); } catch (e) { $('controls').textContent = e.message; return; }
+  setCameraIds(p.cameras || [], $('cam_camera_id').value);
+  if (!p.controls || !p.controls.length) {
+    $('controls').textContent = $('cam_source').value === 'libcamera'
+      ? 'Keine Regler gefunden' + (p.error ? ': ' + p.error : ' (Kamera starten oder install.sh erneut ausführen).')
+      : 'Regler gibt es nur für libcamera.';
+    return;
+  }
+  $('controls').className = '';
+  $('controls').innerHTML = p.controls.map(ctlRow).join('');
+  p.controls.forEach(c => { if (c.type === 'int' || c.type === 'float') $('out_' + c.name).value = fmt(valueOf(c), c); });
+}
+function valueOf(c) { return c.name in controls ? controls[c.name] : c.default; }
+function fmt(v, c) { return c.type === 'float' ? Number(v).toFixed(2) : String(v); }
+function ctlRow(c) {
+  const v = valueOf(c), id = 'ctl_' + c.name, title = esc(c.help || c.name);
+  let input;
+  if (c.type === 'bool') {
+    input = `<input type="checkbox" id="${id}" ${v ? 'checked' : ''} onchange="setControl('${c.name}', this.checked)">`;
+  } else if (c.type === 'enum') {
+    input = `<select id="${id}" onchange="setControl('${c.name}', Number(this.value))">` +
+      c.options.map(o => `<option value="${o.value}" ${o.value === v ? 'selected' : ''}>${esc(o.label)}</option>`).join('') + '</select>';
+  } else {
+    const sane = Math.abs(c.min) < 1e6 && Math.abs(c.max) < 1e6;  // huge ranges: a slider is useless
+    const step = c.type === 'float' ? (c.max - c.min) / 200 || 0.01 : 1;
+    input = sane
+      ? `<input type="range" id="${id}" min="${c.min}" max="${c.max}" step="${step}" value="${v}" oninput="setControl('${c.name}', Number(this.value), this)">`
+      : `<input type="number" id="${id}" value="${v}" step="${c.type === 'float' ? 'any' : 1}" onchange="setControl('${c.name}', Number(this.value), this)">`;
+  }
+  const reset = `<button onclick="resetControl('${c.name}', ${JSON.stringify(c.default)})" title="Standardwert">↺</button>`;
+  return `<div class="ctl" title="${title}"><span>${esc(c.label)}</span>${input}<output id="out_${c.name}"></output>${reset}</div>`;
+}
+function setControl(name, value, el) {
+  controls[name] = value;
+  if (el) $('out_' + name).value = Number.isInteger(value) ? String(value) : value.toFixed(2);  // el: numeric inputs only
+  clearTimeout(controlTimer);
+  controlTimer = setTimeout(async () => {
+    try { await api('/api/config', {camera: {controls}}); msg('cammsg', 'Regler übernommen.', true); }
+    catch (e) { msg('cammsg', e.message); }
+  }, 300);
+}
+function resetControl(name, def) {
+  const el = $('ctl_' + name);
+  if (el.type === 'checkbox') el.checked = def; else el.value = def;
+  setControl(name, def, el.type === 'range' || el.type === 'number' ? el : null);
+}
+function refreshPreview() {
+  if (!state || !state.config.camera.enabled || !state.camera.running) { $('preview').style.display = 'none'; return; }
+  const img = new Image();
+  img.onload = () => { $('preview').src = img.src; $('preview').style.display = 'block'; };
+  img.src = '/snapshot.jpg?t=' + Date.now();
 }
 
 // ----- update -----
@@ -237,6 +389,9 @@ async function refresh() {
   const c = s.camera;
   $('camstate').textContent = !s.config.camera.enabled ? 'aus' : c.running ? `läuft, ${c.clients} Client(s)` : 'läuft nicht – siehe Log';
   $('rtsp').textContent = c.rtsp; $('onvifurl').textContent = c.onvif;
+  $('rtsp_sub').textContent = s.config.camera.sub_enabled ? c.rtsp_sub : '';
+  $('snapurl').textContent = location.origin + '/snapshot.jpg';
+  $('rotmsg').textContent = s.kiosk.error || ''; $('rotmsg').className = 'msg err';
   $('camlog').textContent = c.log.join('\n') || '(noch keine Meldungen)';
   const u = s.update;
   $('installbtn').disabled = !u.available;
@@ -255,7 +410,9 @@ function renderApi() {
     ['POST', '/api/lock', 'Body {"locked": true|false}'],
     ['GET', '/api/status', 'Status (Plintus-Vertrag): version, locked, devices'],
     ['GET', '/api/config', 'komplette Konfiguration und Laufzeitstatus'],
-    ['POST', '/api/config', 'Teil-Konfiguration: {"tabs": [...]}, {"camera": {...}}, {"update": {...}}'],
+    ['POST', '/api/config', 'Teil-Konfiguration: {"tabs": [...]}, {"camera": {...}}, {"update": {...}}, {"rotation": 90}'],
+    ['POST', '/api/config', 'HA hell/dunkel: {"ha": {"theme": "dark"}} (light, dark, auto)'],
+    ['GET', '/snapshot.jpg', 'aktuelles Kamerabild'],
   ];
   $('api').innerHTML = rows.map(([m, p, d]) => `<tr><td>${m}</td><td><code>${base}${p}</code><br><span class="dim">${esc(d)}</span></td></tr>`).join('');
 }
@@ -263,8 +420,10 @@ function renderApi() {
 (async () => {
   renderApi();
   await refresh();
-  if (state) { tabs = state.config.tabs.map(t => ({...t})); renderTabs(); fillCamera(state.config.camera); fillUpdate(state.config.update); $('ha_user').value = state.config.ha.username; }
+  if (state) { tabs = state.config.tabs.map(t => ({...t})); renderTabs(); fillCamera(state.config.camera); fillUpdate(state.config.update); $('ha_user').value = state.config.ha.username;
+    $('ha_theme').value = state.config.ha.theme; $('rotation').value = state.config.rotation; loadControls(); }
   setInterval(refresh, 3000);
+  setInterval(refreshPreview, 2000);
 })();
 </script>
 </body>

@@ -34,17 +34,21 @@ CHECK_EVERY = 6 * 3600
 DEFAULTS = {
     "locked": False,
     "tabs": [{"name": "Home Assistant", "url": "http://homeassistant.local:8123/", "ha": True}],
-    "ha": {"username": "", "password": ""},
+    "rotation": 0,
+    "ha": {"username": "", "password": "", "theme": "auto"},
     "camera": {
-        "enabled": False, "name": "Wall Tablet", "source": "libcamera", "device": "/dev/video0",
-        "custom_source": "", "width": 1280, "height": 720, "fps": 15, "bitrate": 2000, "encoder": "va",
+        "enabled": False, "name": "Wall Tablet", "source": "libcamera", "camera_id": "", "device": "/dev/video0",
+        "custom_source": "", "rotate": "none", "width": 1280, "height": 720, "fps": 15, "bitrate": 2000,
+        "encoder": "va", "profile": "main", "gop": 2,
+        "sub_enabled": True, "sub_width": 640, "sub_height": 360, "sub_bitrate": 500,
+        "audio_enabled": False, "audio_device": "default", "controls": {},
     },
     "update": {"repo": "https://github.com/xAdler21/WallTabletSuite.git", "branch": "main", "auto": False},
 }
 
 lock = threading.Lock()  # guards cfg and kiosk
 cfg = {}
-kiosk = {"seen": 0.0, "tab": ""}
+kiosk = {"seen": 0.0, "tab": "", "error": ""}
 
 
 # ---------- config ----------
@@ -87,10 +91,16 @@ def clean_tabs(tabs):
 
 
 def clean_ha(new, old):
-    user, password = str(new.get("username", "")).strip()[:200], str(new.get("password", ""))[:200]
-    if not user:
-        return {"username": "", "password": ""}
-    return {"username": user, "password": password or old["password"]}  # empty field = keep the stored password
+    c = dict(old)
+    if "username" in new:
+        user, password = str(new["username"]).strip()[:200], str(new.get("password", ""))[:200]
+        # empty user clears the login, empty password field keeps the stored password
+        c["username"], c["password"] = (user, password or old["password"]) if user else ("", "")
+    if "theme" in new:
+        if new["theme"] not in ("auto", "light", "dark"):
+            raise ValueError("ha.theme: auto, light oder dark")
+        c["theme"] = new["theme"]
+    return c
 
 
 def clean_camera(new, old):
@@ -108,9 +118,20 @@ def clean_camera(new, old):
     c["custom_source"] = str(c["custom_source"]).strip()[:500]
     if c["source"] == "custom" and not c["custom_source"]:
         raise ValueError("Eigene Quelle ist leer")
-    if c["encoder"] not in ("va", "x264"):
-        raise ValueError("Encoder: va oder x264")
-    for k, lo, hi in (("width", 160, 3840), ("height", 120, 2160), ("fps", 1, 60), ("bitrate", 100, 20000)):
+    for k, choices in (("encoder", ("va", "x264")), ("profile", tuple(onvif.H264_PROFILES)),
+                       ("rotate", ("none", "90", "180", "270", "hflip", "vflip"))):
+        if c[k] not in choices:
+            raise ValueError(f"{k}: {', '.join(choices)}")
+    c["sub_enabled"], c["audio_enabled"] = bool(c["sub_enabled"]), bool(c["audio_enabled"])
+    c["camera_id"] = str(c["camera_id"]).strip()[:200]
+    if not re.fullmatch(r"[\w:,.=-]{1,64}", str(c["audio_device"])):
+        raise ValueError("Audio-Gerät z. B. default oder plughw:0,0")
+    ctl = c["controls"]
+    if not isinstance(ctl, dict) or len(ctl) > 100 or not all(
+            re.fullmatch(r"[a-z0-9-]{1,64}", str(k)) and isinstance(v, (bool, int, float)) for k, v in ctl.items()):
+        raise ValueError("controls: {name: Zahl oder true/false}")
+    for k, lo, hi in (("width", 160, 3840), ("height", 120, 2160), ("fps", 1, 60), ("bitrate", 100, 20000),
+                      ("gop", 1, 10), ("sub_width", 160, 1920), ("sub_height", 90, 1080), ("sub_bitrate", 64, 8000)):
         try:
             c[k] = int(c[k])
         except (TypeError, ValueError):
@@ -144,13 +165,14 @@ class Camera:
     """Runs camera.py as a child process (GStreamer crashes stay out of the panel) and restarts it."""
 
     def __init__(self):
-        self.proc, self.gen, self.clients = None, 0, 0
-        self.log = deque(maxlen=60)
+        self.proc, self.gen, self.clients, self.config, self.probed = None, 0, 0, None, None
+        self.log = deque(maxlen=80)
         self.mutex = threading.Lock()
 
     def apply(self, c):
         with self.mutex:
             self.gen += 1
+            self.config, self.probed = c, None
             if self.proc and self.proc.poll() is None:
                 self.proc.terminate()
                 try:
@@ -159,20 +181,49 @@ class Camera:
                     self.proc.kill()
             self.proc, self.clients = None, 0
             if c["enabled"]:
-                self._start(c, self.gen)
+                self._start(gen)
 
-    def _start(self, c, gen):
+    def set_controls(self, c):
+        """Only the image controls changed: hand them to the running camera instead of restarting it."""
+        with self.mutex:
+            self.config = c
+            try:
+                self.proc.stdin.write(json.dumps({"controls": c["controls"]}) + "\n")
+                self.proc.stdin.flush()
+                return True
+            except (AttributeError, OSError, ValueError):
+                return False
+
+    def probe(self):
+        """Cameras and controls: from the running camera process, else from a short probe run."""
+        if self.probed is not None:
+            return self.probed
+        try:
+            r = subprocess.run([sys.executable, str(APP / "camera.py"), "--probe", json.dumps(self.config)],
+                               capture_output=True, text=True, timeout=40)
+            if r.returncode:
+                raise ValueError((r.stderr.strip().splitlines() or [f"Code {r.returncode}"])[-1])
+            return json.loads(r.stdout)
+        except (OSError, ValueError, subprocess.SubprocessError) as e:
+            return {"cameras": [], "controls": [], "error": str(e)}
+
+    def _start(self, gen):
         env = {**os.environ, "GST_DEBUG": "2", "GST_DEBUG_NO_COLOR": "1"}
         self.proc = subprocess.Popen(
-            [sys.executable, str(APP / "camera.py"), json.dumps(c), str(RTSP_PORT)],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
-        threading.Thread(target=self._read, args=(self.proc, c, gen), daemon=True).start()
+            [sys.executable, str(APP / "camera.py"), json.dumps(self.config), str(RTSP_PORT)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+        threading.Thread(target=self._read, args=(self.proc, gen), daemon=True).start()
 
-    def _read(self, proc, c, gen):
+    def _read(self, proc, gen):
         for line in proc.stdout:
             line = line.rstrip()
             if line.startswith("CLIENTS "):
                 self.clients = int(line.split()[1])
+            elif line.startswith("PROBE "):
+                try:
+                    self.probed = json.loads(line[6:])
+                except ValueError:
+                    pass
             else:
                 self.log.append(time.strftime("%H:%M:%S ") + line)
         code = proc.wait()
@@ -182,7 +233,7 @@ class Camera:
         time.sleep(10)
         with self.mutex:
             if gen == self.gen:
-                self._start(c, gen)
+                self._start(gen)
 
     def running(self):
         return self.proc is not None and self.proc.poll() is None
@@ -467,8 +518,12 @@ class Handler(BaseHTTPRequestHandler):
     def api_kiosk(self, q):
         with lock:
             kiosk["seen"], kiosk["tab"] = time.time(), q.get("tab", [""])[0][:40]
-            data = {"locked": cfg["locked"], "tabs": [dict(t) for t in cfg["tabs"]]}
+            kiosk["error"] = q.get("error", [""])[0][:300]
+            data = {"locked": cfg["locked"], "rotation": cfg["rotation"], "tabs": [dict(t) for t in cfg["tabs"]]}
             ha = dict(cfg["ha"])
+        for t in data["tabs"]:
+            if t.get("ha"):
+                t["ha_theme"] = ha["theme"]
         # HA tokens only for the kiosk on this machine: the API has no login
         if self.client_address[0] in ("127.0.0.1", "::1") and ha["username"] and ha["password"]:
             for t in data["tabs"]:
@@ -500,26 +555,34 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200, {
             "config": c, "version": VERSION,
             "ha": {"has_password": has_password, "state": dict(ha_logins.state)},
-            "kiosk": {"online": kiosk_online(), "tab": tab},
+            "kiosk": {"online": kiosk_online(), "tab": tab, "error": kiosk["error"]},
             "camera": {"running": camera.running(), "clients": camera.clients, "log": list(camera.log),
-                       "rtsp": f"rtsp://{host}:{RTSP_PORT}/stream",
+                       "rtsp": f"rtsp://{host}:{RTSP_PORT}/stream", "rtsp_sub": f"rtsp://{host}:{RTSP_PORT}/sub",
                        "onvif": f"http://{host}:{PORT}/onvif/device_service"},
             "update": {**updater.info, "log": updater.log()},
         })
 
     def api_config_save(self, q):
         data = self.body_json()
-        restart_camera = None
+        restart_camera = live_camera = None
         with lock:
             new = dict(cfg)
             if "tabs" in data:
                 new["tabs"] = clean_tabs(data["tabs"])
+            if "rotation" in data:
+                if data["rotation"] not in (0, 90, 180, 270):
+                    raise ValueError("rotation: 0, 90, 180 oder 270")
+                new["rotation"] = data["rotation"]
             if "camera" in data:
                 if not isinstance(data["camera"], dict):
                     raise ValueError("camera muss ein Objekt sein")
                 new["camera"] = clean_camera(data["camera"], cfg["camera"])
                 if new["camera"] != cfg["camera"]:
-                    restart_camera = new["camera"]
+                    only_controls = {**new["camera"], "controls": None} == {**cfg["camera"], "controls": None}
+                    if only_controls and camera.running():
+                        live_camera = new["camera"]
+                    else:
+                        restart_camera = new["camera"]
             if "update" in data:
                 if not isinstance(data["update"], dict):
                     raise ValueError("update muss ein Objekt sein")
@@ -530,9 +593,23 @@ class Handler(BaseHTTPRequestHandler):
                 new["ha"] = clean_ha(data["ha"], cfg["ha"])
             cfg.update(new)
             save()
+        if live_camera and not camera.set_controls(live_camera):
+            restart_camera = live_camera
         if restart_camera:
             camera.apply(restart_camera)
         self.send(200, {"ok": True})
+
+    def snapshot(self, q):
+        try:
+            if time.time() - os.path.getmtime(onvif.SNAPSHOT) > 10:
+                raise OSError("veraltet")
+            with open(onvif.SNAPSHOT, "rb") as f:
+                return self.send(200, f.read(), "image/jpeg")
+        except OSError:
+            self.send(503, {"error": "kein Kamerabild"})
+
+    def api_camera_probe(self, q):
+        self.send(200, camera.probe())
 
     def api_update_check(self, q):
         self.body()
@@ -548,6 +625,8 @@ ROUTES = {
     ("GET", "/"): Handler.panel,
     ("GET", "/api/status"): Handler.api_status,
     ("GET", "/api/health"): Handler.api_health,
+    ("GET", "/snapshot.jpg"): Handler.snapshot,
+    ("GET", "/api/camera/probe"): Handler.api_camera_probe,
     ("GET", "/api/kiosk"): Handler.api_kiosk,
     ("GET", "/api/lock"): Handler.api_lock,
     ("POST", "/api/lock"): Handler.api_lock,

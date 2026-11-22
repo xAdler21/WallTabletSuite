@@ -6,9 +6,9 @@
 |---|---|---|
 | Server | [`app/server.py`](app/server.py) | Web-Panel und API auf Port **80** (auch 8447 für Plintus), Konfiguration, Sperre, Updates, startet die Kamera |
 | Kiosk | [`app/kiosk.py`](app/kiosk.py) | Vollbild unter [cage](https://github.com/cage-kiosk/cage): Tab-Leiste links, ein WebKit-View pro Tab (läuft beim Wechsel weiter), Sperrbild |
-| Kamera | [`app/camera.py`](app/camera.py) | GStreamer-RTSP-Server `rtsp://<ip>:8554/stream`, H.264 per VA-API oder x264 |
-| ONVIF | [`app/onvif.py`](app/onvif.py) | WS-Discovery und die Device/Media-Aufrufe, mit denen der NVR die Kamera findet |
-| Panel | [`app/panel.html`](app/panel.html) | Tabs, Kamera, Sperre, Update |
+| Kamera | [`app/camera.py`](app/camera.py) | GStreamer: `rtsp://<ip>:8554/stream` (Haupt-Stream, optional mit Ton), `/sub` (klein), Snapshot, Bild-Regler |
+| ONVIF | [`app/onvif.py`](app/onvif.py) | WS-Discovery und Device/Media: zwei Profile (main/sub), Snapshot-URL, Ton |
+| Panel | [`app/panel.html`](app/panel.html) | Sperre, Drehung, Tabs, HA-Anmeldung und Hell/Dunkel, Kamera mit Vorschau, Update |
 
 Nur Python 3 und Pakete aus Ubuntu (GTK 4, WebKitGTK 6, GStreamer), kein Build-Schritt.
 
@@ -24,6 +24,10 @@ sudo bash /opt/walltablet/deploy/install.sh
 Das Skript installiert die Pakete und legt den Benutzer `kiosk` an. Es richtet drei systemd-Units ein: `wts-server`, `wts-kiosk` (cage auf tty1) und `wts-update`. Am Ende startet das Tablet neu, danach läuft der Kiosk. Web-Panel: `http://<tablet>/`.
 
 **Home Assistant:** Im Panel unter *Home-Assistant-Anmeldung* Benutzer und Passwort eintragen (am besten ein eigener HA-Benutzer ohne Zwei-Faktor) und beim HA-Tab den Haken *HA-Login* setzen. Der Server durchläuft den Login von HA selbst und gibt die Tokens nur an den Kiosk auf dem Tablet. Das Passwort zeigt das Panel nie wieder an. Lehnt HA ab, versucht der Server es erst nach geänderten Zugangsdaten erneut (HA sperrt sonst die IP).
+
+**Hochkant:** Im Panel unter *Anzeige* drehen (über `wlr-randr`). Damit der Touch mitdreht, legt `install.sh` eine udev-Regel an, die den Touchscreen dem internen Bildschirm `eDP-1` zuordnet.
+
+**Hell/Dunkel für HA:** im Panel bei der HA-Anmeldung oder per API `POST /api/config` mit `{"ha": {"theme": "dark"}}` (`light`, `dark`, `auto`). Gilt für Tabs mit Haken *HA-Login*.
 
 **Raus aus dem Kiosk** (USB- oder Cover-Tastatur): `Strg+Alt+F2` öffnet eine Text-Anmeldung, `Strg+Alt+F1` geht zurück zum Kiosk. Klappt auch, wenn der Bildschirm schwarz ist. Alternativ per SSH, falls `openssh-server` installiert ist.
 
@@ -59,8 +63,12 @@ In **Plintus** unter Einstellungen → Wall-Tablet-Suite die Adresse des Tablets
 
 ## Kamera → UniFi Protect
 
-1. Im Panel *Kamera streamen* einschalten und speichern. Beim Start testet der Kamera-Prozess die Pipeline, Fehler stehen im Log darunter.
+1. Im Panel *Kamera streamen* einschalten, Kamera wählen (MIIX: Front und Rück), drehen, Auflösung, Bitrate, Keyframe-Abstand und Profil setzen, speichern. Fehler stehen im Log darunter, das Vorschaubild zeigt, ob Bilder kommen.
 2. Protect → *Drittanbieter-Kameras* (ONVIF): Das Tablet erscheint per Discovery oder lässt sich per IP hinzufügen. Benutzer und Passwort sind egal.
+
+Was Protect bekommt: Profil `main` (Haupt-Stream, mit AAC-Ton wenn eingeschaltet), Profil `sub` (kleiner Stream für die Live-Ansicht), Snapshot-URL für Vorschaubilder.
+
+**Bild-Regler:** Das Panel listet alle Regler, die libcamera für die gewählte Kamera meldet (Helligkeit, Kontrast, Belichtung, Weißabgleich …). Sie wirken sofort, ohne Neustart. Die Liste stammt aus `cam --list-controls`; lässt die sich nicht lesen, zeigt das Panel alle Regler von `libcamerasrc`, und die Kamera ignoriert die nicht unterstützten.
 
 Die Front-Kamera des MIIX 520 hängt an Intel IPU3, nur **libcamera** liest sie (`cam -l` zeigt, ob sie erkannt wird). Klappt das nicht, gibt es zwei Auswege: eine USB-Kamera über *V4L2* oder eine *eigene GStreamer-Quelle*. Ruckelt der Hardware-Encoder oder fehlt er, auf *x264* umstellen.
 
@@ -70,7 +78,7 @@ Wie bei Plintus: Repo-Link und Branch im Panel. *Nach Updates suchen* vergleicht
 
 [`deploy/update.sh`](deploy/update.sh) holt den Branch per `git fetch`, setzt `/opt/walltablet` darauf und startet Server und Kiosk neu. Antwortet `/api/health` (Server läuft, Kiosk fragt an) nicht innerhalb von 90 s dreimal hintereinander, geht es zurück auf den alten Commit. Log im Panel.
 
-Geänderte systemd-Units oder neue Pakete kommen nicht per Update, dafür `install.sh` erneut ausführen.
+Geänderte systemd-Units, neue Pakete oder udev-Regeln kommen nicht per Update, dafür `install.sh` erneut ausführen (nötig für 0.2.0: `wlr-randr`, Ton, Touch-Regel).
 
 ## Sicherheit
 

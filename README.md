@@ -57,7 +57,7 @@ Die Front-Kamera des MIIX 520 hängt an Intel IPU3, nur **libcamera** liest sie 
 
 ## Updates
 
-Wie bei Plintus: Repo-Link und Branch im Panel, *Nach Updates suchen* zeigt neue Commits, *Installieren* spielt sie ein. Optional prüft und installiert der Server alle 6 h selbst.
+Wie bei Plintus: Repo-Link und Branch im Panel. *Nach Updates suchen* vergleicht die Datei `VERSION` im Repo mit der installierten, *Installieren* spielt eine höhere Version ein. Optional prüft und installiert der Server alle 6 h selbst. Für ein Release also `VERSION` erhöhen (z. B. `0.1.1` → `0.1.2`); Commits ohne neue Version werden nicht angeboten.
 
 [`deploy/update.sh`](deploy/update.sh) holt den Branch per `git fetch`, setzt `/opt/walltablet` darauf und startet Server und Kiosk neu. Antwortet `/api/health` (Server läuft, Kiosk fragt an) nicht innerhalb von 90 s dreimal hintereinander, geht es zurück auf den alten Commit. Log im Panel.
 

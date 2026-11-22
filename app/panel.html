@@ -181,7 +181,7 @@ async function saveUpdate() {
 }
 async function checkUpdate() {
   $('checkbtn').disabled = true; msg('upmsg', 'Suche …', true);
-  try { await saveUpdate(); const i = await api('/api/update/check', {}); msg('upmsg', i.error ? i.error : (i.behind ? `${i.behind} neue Änderung(en)` : 'Aktuell.'), !i.error); refresh(); }
+  try { await saveUpdate(); const i = await api('/api/update/check', {}); msg('upmsg', i.error ? i.error : (i.available ? `Version ${i.remote_version} verfügbar` : `Aktuell (Version ${state.version})`), !i.error); refresh(); }
   catch (e) { msg('upmsg', e.message); }
   $('checkbtn').disabled = false;
 }
@@ -200,7 +200,7 @@ async function toggleLock() {
 async function refresh() {
   try { state = await api('/api/config'); } catch (e) { $('kiosk').textContent = 'Server nicht erreichbar'; return; }
   const s = state, locked = s.config.locked;
-  $('ver').textContent = `Version ${s.version} · ${s.commit}`;
+  $('ver').textContent = `Version ${s.version}`;
   $('lockbtn').textContent = locked ? '🔒 Gesperrt – entsperren' : '🔓 Entsperrt – sperren';
   $('lockbtn').className = locked ? 'locked' : 'unlocked';
   $('kiosk').textContent = s.kiosk.online ? `Kiosk online${s.kiosk.tab ? ', Tab „' + s.kiosk.tab + '“' : ''}` : 'Kiosk offline';
@@ -209,10 +209,10 @@ async function refresh() {
   $('rtsp').textContent = c.rtsp; $('onvifurl').textContent = c.onvif;
   $('camlog').textContent = c.log.join('\n') || '(noch keine Meldungen)';
   const u = s.update;
-  $('installbtn').disabled = !(u.behind > 0);
+  $('installbtn').disabled = !u.available;
   $('upinfo').innerHTML = u.checked
     ? `Zuletzt geprüft ${new Date(u.checked * 1000).toLocaleString('de-DE')}` +
-      (u.behind ? ` · verfügbar: ${esc(u.remote_version)} (${esc(u.remote_commit)})<br>` + u.changes.map(esc).join('<br>') : '')
+      (u.available ? ` · Version ${esc(u.remote_version)} verfügbar<br>` + u.changes.map(esc).join('<br>') : ` · aktuell`)
     : 'Noch nicht geprüft.';
   $('uplog').textContent = u.log.join('\n') || '(kein Update-Log)';
 }

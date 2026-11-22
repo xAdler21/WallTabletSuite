@@ -181,20 +181,21 @@ camera = Camera()
 
 # ---------- self-update ----------
 
+def newer(remote, local):
+    """True if version string remote is higher than local (1.10.0 > 1.9.2)."""
+    # shortcut: compares the numbers only, so 1.0.0-alpha.5 counts as 1.0.0.5; fine while no pre-releases are used
+    def nums(v):
+        return [int(n) for n in re.findall(r"\d+", v)]
+    return bool(nums(remote)) and nums(remote) > nums(local)
+
+
 class Updater:
     def __init__(self):
-        self.info = {"checked": None, "remote_version": None, "remote_commit": None, "behind": 0,
-                     "changes": [], "error": None}
+        self.info = {"checked": None, "remote_version": None, "available": False, "changes": [], "error": None}
 
     def git(self, *args):
         return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True,
                               timeout=120, check=True).stdout.strip()
-
-    def commit(self):
-        try:
-            return self.git("rev-parse", "--short", "HEAD")
-        except (OSError, subprocess.SubprocessError):
-            return "?"
 
     def check(self):
         with lock:
@@ -205,11 +206,10 @@ class Updater:
                 remote_version = self.git("show", "FETCH_HEAD:VERSION")
             except subprocess.CalledProcessError:
                 remote_version = "?"
+            available = newer(remote_version, VERSION)
             self.info.update(
-                remote_commit=self.git("rev-parse", "--short", "FETCH_HEAD"),
-                remote_version=remote_version,
-                behind=int(self.git("rev-list", "--count", "HEAD..FETCH_HEAD")),
-                changes=self.git("log", "--format=%h %s", "-n", "20", "HEAD..FETCH_HEAD").splitlines(),
+                remote_version=remote_version, available=available,
+                changes=self.git("log", "--format=%s", "-n", "20", "HEAD..FETCH_HEAD").splitlines() if available else [],
                 error=None)
         except subprocess.CalledProcessError as e:
             self.info["error"] = (e.stderr or str(e)).strip()[-400:]
@@ -237,7 +237,7 @@ class Updater:
             self.check()
             with lock:
                 auto = cfg["update"]["auto"]
-            if auto and self.info["behind"] > 0 and not self.info["error"]:
+            if auto and self.info["available"] and not self.info["error"]:
                 try:
                     self.install()
                 except (OSError, RuntimeError, subprocess.SubprocessError) as e:
@@ -378,7 +378,7 @@ class Handler(BaseHTTPRequestHandler):
             c = json.loads(json.dumps(cfg))
             tab = kiosk["tab"]
         self.send(200, {
-            "config": c, "version": VERSION, "commit": updater.commit(),
+            "config": c, "version": VERSION,
             "kiosk": {"online": kiosk_online(), "tab": tab},
             "camera": {"running": camera.running(), "clients": camera.clients, "log": list(camera.log),
                        "rtsp": f"rtsp://{host}:{RTSP_PORT}/stream",

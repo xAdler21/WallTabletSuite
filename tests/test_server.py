@@ -103,6 +103,13 @@ class ServerTest(unittest.TestCase):
         finally:
             server.cfg["camera"]["enabled"] = False
 
+    def test_version_compare(self):
+        self.assertTrue(server.newer("0.1.10", "0.1.9"))
+        self.assertTrue(server.newer("1.0.0", "0.9.9"))
+        self.assertFalse(server.newer("0.1.0", "0.1.0"))
+        self.assertFalse(server.newer("0.1.0", "0.2.0"))
+        self.assertFalse(server.newer("?", "0.1.0"))
+
     def test_discovery_probe(self):
         probe = (b'<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" '
                  b'xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing" '

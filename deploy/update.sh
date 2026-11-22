@@ -15,20 +15,22 @@ main() {
   read -r repo branch < <(python3 -c 'import json,sys; u=json.load(open(sys.argv[1]))["update"]; print(u["repo"], u["branch"])' "$data/config.json") \
     || { say "Fehler: config.json nicht lesbar"; exit 1; }
 
-  local old new
+  local old new old_ver new_ver
   old=$(git rev-parse HEAD)
+  old_ver=$(cat VERSION)
   say "Hole $repo ($branch)"
   git fetch --quiet "$repo" "$branch" || { say "Fehler: git fetch fehlgeschlagen"; exit 1; }
   new=$(git rev-parse FETCH_HEAD)
-  if [ "$old" = "$new" ]; then say "Schon aktuell (${old:0:7})"; exit 0; fi
+  new_ver=$(git show FETCH_HEAD:VERSION 2>/dev/null || echo "?")
+  if [ "$old" = "$new" ]; then say "Schon aktuell (Version $old_ver)"; exit 0; fi
 
-  say "Update ${old:0:7} -> ${new:0:7} ($(git show -s --format=%s "$new"))"
+  say "Update Version $old_ver -> $new_ver"
   git reset --quiet --hard "$new" || { say "Fehler: git reset fehlgeschlagen"; exit 1; }
   sudo -n /usr/bin/systemctl restart wts-server.service wts-kiosk.service
 
   if healthy; then say "Fertig, Version $(cat VERSION)"; exit 0; fi
 
-  say "Neue Version läuft nicht stabil, zurück auf ${old:0:7}"
+  say "Version $new_ver läuft nicht stabil, zurück auf $old_ver"
   git reset --quiet --hard "$old"
   sudo -n /usr/bin/systemctl restart wts-server.service wts-kiosk.service
   if healthy; then say "Zurückgesetzt"; else say "Auch die alte Version antwortet nicht, bitte prüfen"; fi

@@ -3,18 +3,22 @@
 
 No login, plain HTTP: the panel is meant for the local network only (see README).
 """
+import hashlib
 import json
 import os
 import re
 import socket
+import ssl
 import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import onvif
 
@@ -29,7 +33,8 @@ CHECK_EVERY = 6 * 3600
 
 DEFAULTS = {
     "locked": False,
-    "tabs": [{"name": "Home Assistant", "url": "http://homeassistant.local:8123/"}],
+    "tabs": [{"name": "Home Assistant", "url": "http://homeassistant.local:8123/", "ha": True}],
+    "ha": {"username": "", "password": ""},
     "camera": {
         "enabled": False, "name": "Wall Tablet", "source": "libcamera", "device": "/dev/video0",
         "custom_source": "", "width": 1280, "height": 720, "fps": 15, "bitrate": 2000, "encoder": "va",
@@ -77,8 +82,15 @@ def clean_tabs(tabs):
             raise ValueError("Ein Tab hat keinen Namen")
         if not re.fullmatch(r"https?://\S+", url):
             raise ValueError(f"{name}: Adresse muss mit http:// oder https:// anfangen")
-        out.append({"name": name, "url": url})
+        out.append({"name": name, "url": url, "ha": bool(t.get("ha"))})
     return out
+
+
+def clean_ha(new, old):
+    user, password = str(new.get("username", "")).strip()[:200], str(new.get("password", ""))[:200]
+    if not user:
+        return {"username": "", "password": ""}
+    return {"username": user, "password": password or old["password"]}  # empty field = keep the stored password
 
 
 def clean_camera(new, old):
@@ -248,6 +260,106 @@ class Updater:
 updater = Updater()
 
 
+# ---------- Home Assistant login ----------
+
+HA_FILE = DATA / "ha_tokens.json"
+INSECURE = ssl._create_unverified_context()  # local HA with a self-signed certificate, like the kiosk
+
+
+def origin(url):
+    u = urlsplit(url)
+    host = u.netloc.removesuffix(":80") if u.scheme == "http" else u.netloc.removesuffix(":443")
+    return f"{u.scheme}://{host}"
+
+
+def ha_login(base, user, password):
+    """Home Assistant's own login flow (what its login page does) -> tokens in the format the HA
+    frontend keeps in localStorage.hassTokens. Raises ValueError when HA refuses."""
+    client_id = base + "/"  # same client id as the frontend, so it may refresh these tokens itself
+
+    def post(path, data, form=False):
+        body = urlencode(data).encode() if form else json.dumps(data).encode()
+        ctype = "application/x-www-form-urlencoded" if form else "application/json"
+        req = urllib.request.Request(base + path, body, {"Content-Type": ctype})
+        try:
+            with urllib.request.urlopen(req, timeout=10, context=INSECURE) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            raise ValueError(f"HTTP {e.code} auf {path}") from None
+
+    flow = post("/auth/login_flow", {"client_id": client_id, "handler": ["homeassistant", None],
+                                     "redirect_uri": base + "/?auth_callback=1"})
+    step = post(f"/auth/login_flow/{flow['flow_id']}",
+                {"client_id": client_id, "username": user, "password": password})
+    if step.get("type") != "create_entry":
+        why = (step.get("errors") or {}).get("base") or step.get("step_id") or step.get("reason") or step.get("type")
+        raise ValueError({"invalid_auth": "Benutzername oder Passwort falsch",
+                          "mfa": "Zwei-Faktor-Anmeldung aktiv, eigenen Benutzer ohne MFA anlegen"}
+                         .get(why, f"Anmeldung abgelehnt ({why})"))
+    t = post("/auth/token", {"grant_type": "authorization_code", "code": step["result"], "client_id": client_id},
+             form=True)
+    return {"hassUrl": base, "clientId": client_id, "access_token": t["access_token"],
+            "refresh_token": t["refresh_token"], "token_type": t["token_type"], "expires_in": t["expires_in"],
+            "expires": int(time.time() * 1000) + t["expires_in"] * 1000}
+
+
+class HaLogins:
+    """Logs in once per HA address and keeps the tokens (also across restarts): the HA frontend refreshes
+    the access token on its own, so a new login is only needed when the credentials change."""
+
+    def __init__(self):
+        self.mutex = threading.Lock()
+        try:
+            saved = json.loads(HA_FILE.read_text())
+            self.key, self.tokens = saved["key"], saved["tokens"]
+        except (OSError, ValueError, KeyError):
+            self.key, self.tokens = None, {}
+        self.state = {base: "angemeldet" for base in self.tokens}
+
+    def get(self, base, user, password):
+        """Tokens for base, or None while the login runs or after HA refused it."""
+        key = hashlib.sha256(f"{user}\0{password}".encode()).hexdigest()
+        with self.mutex:
+            if key != self.key:
+                self.key, self.tokens, self.state = key, {}, {}
+                self._save()
+            if base in self.tokens:
+                return self.tokens[base]
+            if base not in self.state:
+                self.state[base] = "Anmeldung läuft"
+                threading.Thread(target=self._login, args=(base, user, password, key), daemon=True).start()
+        return None
+
+    def _login(self, base, user, password, key):
+        retry = False
+        try:
+            tokens, error = ha_login(base, user, password), None
+        except ValueError as e:  # refused: not retried until the credentials change, HA bans IPs after failures
+            tokens, error = None, str(e)
+        except (OSError, KeyError, TypeError) as e:  # HA unreachable or restarting
+            tokens, error, retry = None, f"nicht erreichbar ({e}), neuer Versuch in 30 s", True
+        with self.mutex:
+            if key != self.key:
+                return
+            if tokens:
+                self.tokens[base], self.state[base] = tokens, "angemeldet"
+                self._save()
+            else:
+                self.state[base] = error
+        if retry:
+            time.sleep(30)
+            with self.mutex:
+                if key == self.key and self.state.get(base) == error:
+                    del self.state[base]  # the next kiosk poll starts a new login
+
+    def _save(self):
+        DATA.mkdir(parents=True, exist_ok=True)
+        HA_FILE.write_text(json.dumps({"key": self.key, "tokens": self.tokens}))
+
+
+ha_logins = HaLogins()
+
+
 # ---------- status ----------
 
 def kiosk_online():
@@ -355,7 +467,14 @@ class Handler(BaseHTTPRequestHandler):
     def api_kiosk(self, q):
         with lock:
             kiosk["seen"], kiosk["tab"] = time.time(), q.get("tab", [""])[0][:40]
-            data = {"locked": cfg["locked"], "tabs": cfg["tabs"]}
+            data = {"locked": cfg["locked"], "tabs": [dict(t) for t in cfg["tabs"]]}
+            ha = dict(cfg["ha"])
+        # HA tokens only for the kiosk on this machine: the API has no login
+        if self.client_address[0] in ("127.0.0.1", "::1") and ha["username"] and ha["password"]:
+            for t in data["tabs"]:
+                tokens = t.get("ha") and ha_logins.get(origin(t["url"]), ha["username"], ha["password"])
+                if tokens:
+                    t["ha_tokens"] = tokens
         self.send(200, data)
 
     def api_lock(self, q):
@@ -377,8 +496,10 @@ class Handler(BaseHTTPRequestHandler):
         with lock:
             c = json.loads(json.dumps(cfg))
             tab = kiosk["tab"]
+        has_password = bool(c["ha"].pop("password"))  # never sent out, the API has no login
         self.send(200, {
             "config": c, "version": VERSION,
+            "ha": {"has_password": has_password, "state": dict(ha_logins.state)},
             "kiosk": {"online": kiosk_online(), "tab": tab},
             "camera": {"running": camera.running(), "clients": camera.clients, "log": list(camera.log),
                        "rtsp": f"rtsp://{host}:{RTSP_PORT}/stream",
@@ -403,6 +524,10 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(data["update"], dict):
                     raise ValueError("update muss ein Objekt sein")
                 new["update"] = clean_update(data["update"], cfg["update"])
+            if "ha" in data:
+                if not isinstance(data["ha"], dict):
+                    raise ValueError("ha muss ein Objekt sein")
+                new["ha"] = clean_ha(data["ha"], cfg["ha"])
             cfg.update(new)
             save()
         if restart_camera:
@@ -443,6 +568,7 @@ def serve(port):
 
 
 def main():
+    os.umask(0o077)  # config.json holds the HA password, ha_tokens.json its tokens
     cfg.update(load())
     save()
     serve(PORT)

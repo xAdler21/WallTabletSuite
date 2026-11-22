@@ -23,7 +23,8 @@
   button:disabled { opacity: .5; cursor: default; }
   .row { display:flex; gap:8px; align-items:center; flex-wrap: wrap; }
   .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0 12px; }
-  .tab { display:grid; grid-template-columns: 1fr 2fr auto; gap:8px; margin-bottom:8px; align-items:center; }
+  .tab { display:grid; grid-template-columns: 1fr 2fr auto auto; gap:8px; margin-bottom:8px; align-items:center; }
+  .tab .check { font-size: 13px; white-space: nowrap; margin: 0; }
   .tab .btns { display:flex; gap:4px; }
   .tab button { padding: 8px 10px; }
   @media (max-width: 600px) { .tab { grid-template-columns: 1fr; } }
@@ -61,6 +62,20 @@
       <button class="primary" onclick="saveTabs()">Speichern</button>
     </div>
     <div class="msg" id="tabsmsg"></div>
+  </section>
+
+  <section>
+    <h2>Home-Assistant-Anmeldung</h2>
+    <p class="dim" style="margin-top:0">Tabs mit Haken „HA-Login“ werden damit automatisch angemeldet. Am besten einen eigenen HA-Benutzer ohne Zwei-Faktor-Anmeldung anlegen.</p>
+    <div class="grid">
+      <div><label>Benutzername</label><input id="ha_user" autocomplete="off"></div>
+      <div><label>Passwort</label><input id="ha_pass" type="password" autocomplete="new-password"></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="primary" onclick="saveHa()">Speichern</button>
+      <span class="dim" id="hastate"></span>
+    </div>
+    <div class="msg" id="hamsg"></div>
   </section>
 
   <section>
@@ -140,6 +155,7 @@ function renderTabs() {
     <div class="tab">
       <input placeholder="Name" value="${esc(t.name)}" oninput="tabs[${i}].name=this.value">
       <input placeholder="http://…" value="${esc(t.url)}" oninput="tabs[${i}].url=this.value">
+      <label class="check" title="Mit den Home-Assistant-Zugangsdaten anmelden"><input type="checkbox" ${t.ha ? 'checked' : ''} onchange="tabs[${i}].ha=this.checked">HA-Login</label>
       <div class="btns">
         <button title="nach oben" onclick="moveTab(${i},-1)" ${i ? '' : 'disabled'}>↑</button>
         <button title="nach unten" onclick="moveTab(${i},1)" ${i < tabs.length - 1 ? '' : 'disabled'}>↓</button>
@@ -147,11 +163,21 @@ function renderTabs() {
       </div>
     </div>`).join('') || '<p class="dim">Keine Tabs.</p>';
 }
-function addTab() { tabs.push({name: '', url: 'http://'}); renderTabs(); }
+function addTab() { tabs.push({name: '', url: 'http://', ha: false}); renderTabs(); }
 function moveTab(i, d) { [tabs[i], tabs[i + d]] = [tabs[i + d], tabs[i]]; renderTabs(); }
 async function saveTabs() {
   try { await api('/api/config', {tabs}); msg('tabsmsg', 'Gespeichert, der Kiosk übernimmt es sofort.', true); }
   catch (e) { msg('tabsmsg', e.message); }
+}
+
+// ----- home assistant -----
+async function saveHa() {
+  try {
+    await api('/api/config', {ha: {username: $('ha_user').value, password: $('ha_pass').value}});
+    $('ha_pass').value = '';
+    msg('hamsg', $('ha_user').value ? 'Gespeichert, der Kiosk meldet sich gleich an.' : 'Zugangsdaten gelöscht.', true);
+    refresh();
+  } catch (e) { msg('hamsg', e.message); }
 }
 
 // ----- camera -----
@@ -204,6 +230,10 @@ async function refresh() {
   $('lockbtn').textContent = locked ? '🔒 Gesperrt – entsperren' : '🔓 Entsperrt – sperren';
   $('lockbtn').className = locked ? 'locked' : 'unlocked';
   $('kiosk').textContent = s.kiosk.online ? `Kiosk online${s.kiosk.tab ? ', Tab „' + s.kiosk.tab + '“' : ''}` : 'Kiosk offline';
+  $('ha_pass').placeholder = s.ha.has_password ? 'gespeichert – leer lassen = unverändert' : '';
+  const ha = Object.entries(s.ha.state);
+  $('hastate').textContent = !s.config.ha.username ? 'keine Zugangsdaten'
+    : ha.length ? ha.map(([url, st]) => `${url}: ${st}`).join(' · ') : 'noch kein Tab mit HA-Login geladen';
   const c = s.camera;
   $('camstate').textContent = !s.config.camera.enabled ? 'aus' : c.running ? `läuft, ${c.clients} Client(s)` : 'läuft nicht – siehe Log';
   $('rtsp').textContent = c.rtsp; $('onvifurl').textContent = c.onvif;
@@ -233,7 +263,7 @@ function renderApi() {
 (async () => {
   renderApi();
   await refresh();
-  if (state) { tabs = state.config.tabs.map(t => ({...t})); renderTabs(); fillCamera(state.config.camera); fillUpdate(state.config.update); }
+  if (state) { tabs = state.config.tabs.map(t => ({...t})); renderTabs(); fillCamera(state.config.camera); fillUpdate(state.config.update); $('ha_user').value = state.config.ha.username; }
   setInterval(refresh, 3000);
 })();
 </script>

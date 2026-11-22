@@ -15,6 +15,9 @@ from pathlib import Path
 
 import gi
 
+# Ubuntu blocks unprivileged user namespaces for programs without an AppArmor profile (python3 here), so
+# WebKit's bubblewrap sandbox cannot start its web processes and the kiosk aborts. Only local pages are shown.
+os.environ.setdefault("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS", "1")
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("WebKit", "6.0")
@@ -35,6 +38,17 @@ window, .bar, .empty { background: #101214; color: #e8e8e8; }
 .lock-text { font-size: 22px; color: #9aa0a6; }
 .empty { font-size: 22px; }
 """
+
+
+# Logs the HA frontend in with the tokens server.py got: written to localStorage before HA's own scripts run
+HA_LOGIN = """(function () {
+  var tokens = %s;
+  if (location.origin !== tokens.hassUrl) return;
+  var stored = null;
+  try { stored = JSON.parse(localStorage.getItem("hassTokens")); } catch (e) {}
+  if (stored && stored.refresh_token === tokens.refresh_token) return;
+  try { localStorage.setItem("hassTokens", JSON.stringify(tokens)); } catch (e) {}
+})();"""
 
 
 def local_ip():
@@ -128,7 +142,12 @@ class Kiosk(Gtk.Application):
                                css_classes=["empty"], justify=Gtk.Justification.CENTER)
         self.stack.add_named(self.empty, "empty")
         for i, tab in enumerate(tabs):
-            view = WebKit.WebView(network_session=self.session,
+            scripts = WebKit.UserContentManager()
+            if tab.get("ha_tokens"):
+                scripts.add_script(WebKit.UserScript.new(
+                    HA_LOGIN % json.dumps(tab["ha_tokens"]), WebKit.UserContentInjectedFrames.TOP_FRAME,
+                    WebKit.UserScriptInjectionTime.START, None, None))
+            view = WebKit.WebView(network_session=self.session, user_content_manager=scripts,
                                   website_policies=WebKit.WebsitePolicies(autoplay=WebKit.AutoplayPolicy.ALLOW))
             view.connect("load-failed", self.on_load_failed)
             view.connect("context-menu", lambda *_: True)

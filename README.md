@@ -23,7 +23,7 @@ sudo bash /opt/walltablet/deploy/install.sh
 
 Das Skript installiert die Pakete und legt den Benutzer `kiosk` an. Es richtet drei systemd-Units ein: `wts-server`, `wts-kiosk` (cage auf tty1) und `wts-update`. Am Ende startet das Tablet neu, danach läuft der Kiosk. Web-Panel: `http://<tablet>/`.
 
-Home Assistant einmal im Kiosk anmelden (Tastatur-Cover des MIIX). Die Anmeldung bleibt gespeichert.
+**Home Assistant:** Im Panel unter *Home-Assistant-Anmeldung* Benutzer und Passwort eintragen (am besten ein eigener HA-Benutzer ohne Zwei-Faktor) und beim HA-Tab den Haken *HA-Login* setzen. Der Server durchläuft den Login von HA selbst und gibt die Tokens nur an den Kiosk auf dem Tablet. Das Passwort zeigt das Panel nie wieder an. Lehnt HA ab, versucht der Server es erst nach geänderten Zugangsdaten erneut (HA sperrt sonst die IP).
 
 **Raus aus dem Kiosk** (USB- oder Cover-Tastatur): `Strg+Alt+F2` öffnet eine Text-Anmeldung, `Strg+Alt+F1` geht zurück zum Kiosk. Klappt auch, wenn der Bildschirm schwarz ist. Alternativ per SSH, falls `openssh-server` installiert ist.
 

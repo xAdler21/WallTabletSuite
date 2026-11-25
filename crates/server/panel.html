@@ -188,7 +188,7 @@
   <section>
     <h2>Update</h2>
     <div class="grid">
-      <div style="grid-column: span 2"><label>Git-Repo</label><input id="up_repo"></div>
+      <div style="grid-column: span 2"><label>GitHub-Repo (oder Link auf eine latest.json)</label><input id="up_repo"></div>
       <div><label>Branch</label><input id="up_branch"></div>
     </div>
     <label class="check" style="margin-top:10px"><input type="checkbox" id="up_auto">Automatisch installieren (Prüfung alle 6 h)</label>
@@ -200,6 +200,19 @@
     <div class="msg" id="upmsg"></div>
     <div class="dim" id="upinfo"></div>
     <pre id="uplog"></pre>
+  </section>
+
+  <section>
+    <h2>Logs</h2>
+    <div class="row">
+      <select id="logunit" style="width:auto">
+        <option value="wts-kiosk">Kiosk</option>
+        <option value="wts-server">Server und Kamera</option>
+        <option value="wts-update">Update</option>
+      </select>
+      <button onclick="loadLogs()">Laden</button>
+    </div>
+    <pre id="logs">(Laden drücken)</pre>
   </section>
 
   <section>
@@ -339,10 +352,16 @@ function setControl(name, value, el) {
     catch (e) { msg('cammsg', e.message); }
   }, 300);
 }
-function resetControl(name, def) {
+// reset = remove the setting: the camera restarts and the driver's own default applies again
+async function resetControl(name, def) {
+  if (!(name in controls)) return;
+  delete controls[name];
   const el = $('ctl_' + name);
   if (el.type === 'checkbox') el.checked = def; else el.value = def;
-  setControl(name, def, el.type === 'range' || el.type === 'number' ? el : null);
+  if (el.type === 'range' || el.type === 'number') $('out_' + name).value = fmt(def, {type: Number.isInteger(def) ? 'int' : 'float'});
+  clearTimeout(controlTimer);
+  try { await api('/api/config', {camera: {controls}}); msg('cammsg', 'Regler zurückgesetzt, Kamera startet neu.', true); }
+  catch (e) { msg('cammsg', e.message); }
 }
 function refreshPreview() {
   if (!state || !state.config.camera.enabled || !state.camera.running) { $('preview').style.display = 'none'; return; }
@@ -369,6 +388,15 @@ async function installUpdate() {
   catch (e) { msg('upmsg', e.message); }
 }
 
+// ----- logs (journal of this boot) -----
+async function loadLogs() {
+  try {
+    const r = await api('/api/logs?unit=' + $('logunit').value);
+    $('logs').textContent = r.lines.join('\n') || '(leer)';
+    $('logs').scrollTop = $('logs').scrollHeight;
+  } catch (e) { $('logs').textContent = e.message; }
+}
+
 // ----- lock -----
 async function toggleLock() {
   try { await api('/api/lock', {locked: !state.config.locked}); refresh(); } catch (e) { alert(e.message); }
@@ -381,7 +409,10 @@ async function refresh() {
   $('ver').textContent = `Version ${s.version}`;
   $('lockbtn').textContent = locked ? '🔒 Gesperrt – entsperren' : '🔓 Entsperrt – sperren';
   $('lockbtn').className = locked ? 'locked' : 'unlocked';
-  $('kiosk').textContent = s.kiosk.online ? `Kiosk online${s.kiosk.tab ? ', Tab „' + s.kiosk.tab + '“' : ''}` : 'Kiosk offline';
+  $('kiosk').textContent = !s.kiosk.online ? 'Kiosk offline'
+    : s.kiosk.safe ? 'Kiosk im sicheren Modus: er ist mehrfach abgestürzt, Ursache unten unter Logs'
+    : `Kiosk online${s.kiosk.tab ? ', Tab „' + s.kiosk.tab + '“' : ''}`;
+  $('kiosk').className = s.kiosk.online && !s.kiosk.safe ? 'dim' : 'err';
   $('ha_pass').placeholder = s.ha.has_password ? 'gespeichert – leer lassen = unverändert' : '';
   const ha = Object.entries(s.ha.state);
   $('hastate').textContent = !s.config.ha.username ? 'keine Zugangsdaten'
@@ -395,10 +426,11 @@ async function refresh() {
   $('camlog').textContent = c.log.join('\n') || '(noch keine Meldungen)';
   const u = s.update;
   $('installbtn').disabled = !u.available;
-  $('upinfo').innerHTML = u.checked
+  $('upinfo').innerHTML = (u.checked
     ? `Zuletzt geprüft ${new Date(u.checked * 1000).toLocaleString('de-DE')}` +
-      (u.available ? ` · Version ${esc(u.remote_version)} verfügbar<br>` + u.changes.map(esc).join('<br>') : ` · aktuell`)
-    : 'Noch nicht geprüft.';
+      (u.error ? ` · <span class="err">${esc(u.error)}</span>` : u.available ? ` · Version ${esc(u.remote_version)} verfügbar` : ' · aktuell')
+    : 'Noch nicht geprüft.') +
+    (u.failed ? `<br>Version ${esc(u.failed)} lief nicht stabil und wurde zurückgenommen, automatisch wird sie nicht erneut installiert.` : '');
   $('uplog').textContent = u.log.join('\n') || '(kein Update-Log)';
 }
 

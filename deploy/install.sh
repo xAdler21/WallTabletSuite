@@ -1,41 +1,63 @@
 #!/bin/bash
-# One-time setup on the tablet (Ubuntu 26.04). Run as root from the clone in /opt/walltablet:
-#   sudo git clone https://github.com/xAdler21/WallTabletSuite.git /opt/walltablet
-#   sudo bash /opt/walltablet/deploy/install.sh
-# Safe to run again (e.g. after an update that changed the systemd units).
+# Setup on the tablet (Ubuntu 26.04), run as root from an unpacked release package:
+#   curl -fsSL https://raw.githubusercontent.com/xAdler21/WallTabletSuite/main/release/walltablet.tar.gz | tar xz
+#   sudo bash walltablet-*/deploy/install.sh
+# Also moves an old Python version (git clone in /opt/walltablet, 0.1-0.2) aside; settings in
+# /var/lib/walltablet stay. Safe to run again, always from a freshly unpacked package: everything under
+# /opt/walltablet belongs to user kiosk, so running a script from there as root would hand root to kiosk.
 set -euo pipefail
-DIR=/opt/walltablet
+ROOT=/opt/walltablet
 USER_NAME=kiosk
+SRC=$(cd "$(dirname "$0")/.." && pwd -P)
 
 [ "$(id -u)" = 0 ] || { echo "Bitte mit sudo ausführen"; exit 1; }
-[ -f "$DIR/app/server.py" ] || { echo "Repo muss in $DIR liegen"; exit 1; }
+[ -x "$SRC/bin/wts-server" ] && [ -f "$SRC/VERSION" ] || { echo "$SRC ist kein entpacktes Release-Paket (bin/wts-server fehlt)"; exit 1; }
+VER=$(cat "$SRC/VERSION")
+case "$SRC/" in "$ROOT"/*) echo "Bitte aus einem frisch entpackten Paket ausführen, nicht aus $ROOT (siehe README)"; exit 1 ;; esac
 
 echo "== Pakete"
 apt-get update
 apt-get install -y --no-install-recommends \
-  git curl python3 python3-gi gir1.2-gtk-4.0 gir1.2-webkit-6.0 cage wlr-randr fonts-noto-color-emoji \
+  curl ca-certificates cage fonts-noto-color-emoji libgtk-4-1 libwebkitgtk-6.0-4 \
   gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
   gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-alsa gstreamer1.0-libcamera \
-  gir1.2-gst-rtsp-server-1.0 libcamera-tools alsa-utils
-# H.264 encoding in hardware on Kaby Lake; the non-free driver (multiverse) has the encoder kernels
+  libgstrtspserver-1.0-0 libcamera-tools libcamera-ipa alsa-utils
+# H.264 encoding in hardware on Kaby Lake; the non-free driver (multiverse) has the encoder kernels.
+# Without it the camera falls back to x264 on its own.
 apt-get install -y intel-media-va-driver-non-free || apt-get install -y intel-media-va-driver || true
 
 echo "== Benutzer $USER_NAME"
 id "$USER_NAME" >/dev/null 2>&1 || useradd -m -s /bin/bash "$USER_NAME"
-usermod -aG video,render,input,audio "$USER_NAME"
-chown -R "$USER_NAME:" "$DIR"
+# systemd-journal: the panel shows the logs of kiosk, server and update
+usermod -aG video,render,input,audio,systemd-journal "$USER_NAME"
+# the user's PipeWire (microphone behind ALSA "default") runs without a kiosk session, and logind does not
+# delete the camera snapshot in /dev/shm when the kiosk session ends
+loginctl enable-linger "$USER_NAME"
 
-echo "== Touch folgt der Bildschirmdrehung"
-# without an output, wlroots maps touch to the whole layout and ignores the rotation (WL_OUTPUT = internal panel)
-cat >/etc/udev/rules.d/90-walltablet-touch.rules <<'EOF'
-ENV{ID_INPUT_TOUCHSCREEN}=="1", ENV{WL_OUTPUT}="eDP-1"
-ENV{ID_INPUT_TABLET}=="1", ENV{WL_OUTPUT}="eDP-1"
-EOF
-udevadm control --reload
-udevadm trigger --subsystem-match=input || true
+echo "== Version $VER nach $ROOT"
+if [ -d "$ROOT/.git" ]; then
+  echo "Alte Python-Version gefunden, verschoben nach $ROOT.old-python"
+  systemctl stop wts-kiosk.service wts-server.service 2>/dev/null || true
+  rm -rf "$ROOT.old-python"
+  mv "$ROOT" "$ROOT.old-python"
+fi
+mkdir -p "$ROOT/releases"
+rm -rf "$ROOT/releases/$VER"
+cp -a "$SRC" "$ROOT/releases/$VER"
+ln -sfn "$ROOT/releases/$VER" "$ROOT/current.new"
+mv -Tf "$ROOT/current.new" "$ROOT/current"
+chown -R "$USER_NAME:" "$ROOT"
+# the 0.2.0 touch rule never worked in cage; the kiosk now turns inside GTK and touch follows by itself
+if [ -f /etc/udev/rules.d/90-walltablet-touch.rules ]; then
+  rm -f /etc/udev/rules.d/90-walltablet-touch.rules
+  udevadm control --reload || true
+fi
+# fresh start for the kiosk's crash guard (safe mode, software rendering)
+home=$(getent passwd "$USER_NAME" | cut -d: -f6)
+rm -f "$home/.local/share/walltablet/starts.json" "$home/.local/share/walltablet/careful"
 
 echo "== systemd"
-install -m 644 "$DIR"/deploy/wts-*.service /etc/systemd/system/
+install -m 644 "$SRC/deploy/"wts-*.service /etc/systemd/system/ # from the root-owned package, not kiosk's copy
 cat >/etc/pam.d/wts-kiosk <<'EOF'
 auth     required pam_unix.so nullok
 account  required pam_unix.so
@@ -59,8 +81,9 @@ systemctl set-default graphical.target
 
 ip=$(hostname -I | awk '{print $1}')
 echo
-echo "Fertig. Web-Panel: http://$ip/"
+echo "Fertig, Version $VER. Web-Panel: http://$ip/"
 echo "Kamera: im Panel einschalten, dann in UniFi Protect als ONVIF-Kamera hinzufügen."
+[ "${WTS_NO_REBOOT:-}" = 1 ] && exit 0 # tests
 echo "Neustart in 10 s, danach läuft der Kiosk auf dem Bildschirm (Strg+C bricht den Neustart ab)."
 sleep 10
 systemctl reboot

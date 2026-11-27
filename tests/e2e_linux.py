@@ -269,6 +269,7 @@ def kiosk_checks():
                                              (90, 0.85, 0.85, "green"), (90, 0.15, 0.85, "yellow"),
                                              (270, 0.15, 0.15, "green"), (270, 0.85, 0.15, "yellow")]):
         http("/api/config", {"rotation": deg, "tabs": [{"name": "Test", "url": f"http://127.0.0.1:{PAGE_PORT}/?t={n}"}]})
+        time.sleep(2)  # the new page looks like the old one: give the kiosk time to swap and load it before tapping
         fresh = wait(lambda: layout(screenshot(wayland)) == {0: "top", 90: "right", 270: "left"}[deg], 15)
         err = tap(wayland, fx, fy) if fresh else "page not shown"
         got = wait(lambda: color(screenshot(wayland), 0.5, 0.5) == want, 5)
@@ -298,6 +299,14 @@ def kiosk_checks():
     shot = screenshot(wayland)
     check("tab bar shown with two tabs", color(shot, 0.02, 0.5) == "dark" and color(shot, 0.6, 0.15) == "red",
           f"{color(shot, 0.02, 0.5)} / {color(shot, 0.6, 0.15)}")
+    # portrait: the bar moves to the top of the turned picture, at 90 degrees that is the screen's right edge;
+    # the page's red half (its top) is next to it, the blue half on the left
+    http("/api/config", {"rotation": 90})
+    probes = lambda s: (color(s, 0.985, 0.5), color(s, 0.75, 0.5), color(s, 0.25, 0.5), color(s, 0.02, 0.5))
+    on_top = wait(lambda: probes(screenshot(wayland)) == ("dark", "red", "blue", "blue"), 15)
+    check("portrait: tab bar on top", on_top, str(probes(screenshot(wayland))))
+    http("/api/config", {"rotation": 0})
+    wait(lambda: color(screenshot(wayland), 0.02, 0.5) == "dark", 15)
     check("kiosk log has no panic", "panicked" not in (TMP / "kiosk.log").read_text(errors="replace"), tail("kiosk"))
 
     # crash guard: the 4th start within 3 minutes is a safe mode that the server and the health check see

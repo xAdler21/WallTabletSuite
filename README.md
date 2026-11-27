@@ -27,11 +27,11 @@ Das Skript installiert die Pakete und legt den Benutzer `kiosk` an. Es legt das 
 
 **Raus aus dem Kiosk** (USB- oder Cover-Tastatur): `Strg+Alt+F2` öffnet eine Text-Anmeldung, `Strg+Alt+F1` geht zurück zum Kiosk. Klappt auch, wenn der Bildschirm schwarz ist. Alternativ per SSH, falls `openssh-server` installiert ist.
 
-**Home Assistant:** Im Panel unter *Home-Assistant-Anmeldung* Benutzer und Passwort eintragen (am besten ein eigener HA-Benutzer ohne Zwei-Faktor) und beim HA-Tab den Haken *HA-Login* setzen. Der Server durchläuft den Login von HA selbst und gibt die Tokens nur an den Kiosk auf dem Tablet. Das Passwort zeigt das Panel nie wieder an. Lehnt HA ab, versucht der Server es erst nach geänderten Zugangsdaten erneut (HA sperrt sonst die IP).
+**Home Assistant:** Im Panel unter *Home-Assistant-Anmeldung* Benutzer und Passwort eintragen (am besten ein eigener HA-Benutzer ohne Zwei-Faktor) und beim HA-Tab den Haken *Home Assistant* setzen. Der Server durchläuft den Login von HA selbst und gibt die Tokens nur an den Kiosk auf dem Tablet. Das Passwort zeigt das Panel nie wieder an. Lehnt HA ab, versucht der Server es erst nach geänderten Zugangsdaten erneut (HA sperrt sonst die IP).
 
-**Hell/Dunkel für HA:** im Panel bei der HA-Anmeldung oder per API `POST /api/config` mit `{"ha": {"theme": "dark"}}` (`light`, `dark`, `auto`). Gilt für Tabs mit Haken *HA-Login*.
+**Hell/Dunkel für HA:** im Panel unter *Anzeige* oder per API `POST /api/config` mit `{"ha": {"theme": "dark"}}` (`light`, `dark`, `auto`). Gilt für Tabs mit Haken *Home Assistant*, auch ohne gespeicherte Anmeldung.
 
-**Hochkant:** Im Panel unter *Anzeige* drehen. Der Kiosk dreht sein Bild selbst (in GTK), Touch dreht automatisch mit, ohne Neustart. Einzige Ausnahme: Aufklapplisten (`<select>`) einer Webseite öffnen sich ungedreht.
+**Hochkant:** Im Panel unter *Anzeige* drehen. Der Kiosk dreht sein Bild selbst (in GTK), Touch dreht automatisch mit, ohne Neustart. Hochkant stehen die Tabs oben in einer Zeile, quer links. Einzige Ausnahme beim Drehen: Aufklapplisten (`<select>`) einer Webseite öffnen sich ungedreht.
 
 ## Wenn der Kiosk abstürzt
 
@@ -75,7 +75,7 @@ Was Protect bekommt: Profil `main` (Haupt-Stream, mit AAC-Ton wenn eingeschaltet
 
 **Ton:** Fehlt das Mikrofon oder lässt es sich nicht öffnen, läuft der Haupt-Stream ohne Ton weiter. Klappt `default` nicht, `plughw:0,0` probieren (Liste: `arecord -l`).
 
-Die Front-Kamera des MIIX 520 hängt an Intel IPU3, nur **libcamera** liest sie (`cam -l` zeigt, ob sie erkannt wird). Klappt das nicht, gibt es zwei Auswege: eine USB-Kamera über *V4L2* oder eine *eigene GStreamer-Quelle*. Fehlt der Hardware-Encoder (`vah264enc`), nimmt die Kamera von selbst *x264*.
+Die Front-Kamera des MIIX 520 hängt an Intel IPU3, nur **libcamera** liest sie (`cam -l` zeigt, ob sie erkannt wird). Findet libcamera keine Kamera, zeigt der Knopf *Kamera-Diagnose* im Panel, woran es liegt: Video-Geräte, Sensoren laut Firmware, Kernel-Module und -Meldungen, welche libcamera geladen wird. Klappt das nicht, gibt es zwei Auswege: eine USB-Kamera über *V4L2* oder eine *eigene GStreamer-Quelle*. Fehlt der Hardware-Encoder (`vah264enc`), nimmt die Kamera von selbst *x264*.
 
 ## Updates
 

@@ -72,8 +72,16 @@
           <option value="180">180°</option>
           <option value="270">270°</option>
         </select></div>
+      <div><label>Home Assistant hell/dunkel</label>
+        <select id="ha_theme" onchange="saveTheme()">
+          <option value="auto">wie in HA eingestellt</option>
+          <option value="light">Hell</option>
+          <option value="dark">Dunkel</option>
+        </select></div>
     </div>
+    <p class="dim" style="margin:6px 0 0">Hochkant stehen die Tabs oben. Hell/Dunkel gilt für Tabs mit Haken „Home Assistant“.</p>
     <div class="msg" id="rotmsg"></div>
+    <div class="msg" id="thememsg"></div>
   </section>
 
   <section>
@@ -88,16 +96,10 @@
 
   <section>
     <h2>Home-Assistant-Anmeldung</h2>
-    <p class="dim" style="margin-top:0">Tabs mit Haken „HA-Login“ werden damit automatisch angemeldet. Am besten einen eigenen HA-Benutzer ohne Zwei-Faktor-Anmeldung anlegen.</p>
+    <p class="dim" style="margin-top:0">Optional: Tabs mit Haken „Home Assistant“ werden damit automatisch angemeldet. Am besten einen eigenen HA-Benutzer ohne Zwei-Faktor-Anmeldung anlegen.</p>
     <div class="grid">
       <div><label>Benutzername</label><input id="ha_user" autocomplete="off"></div>
       <div><label>Passwort</label><input id="ha_pass" type="password" autocomplete="new-password"></div>
-      <div><label>Darstellung</label>
-        <select id="ha_theme" onchange="saveTheme()">
-          <option value="auto">wie in HA eingestellt</option>
-          <option value="light">Hell</option>
-          <option value="dark">Dunkel</option>
-        </select></div>
     </div>
     <div class="row" style="margin-top:12px">
       <button class="primary" onclick="saveHa()">Speichern</button>
@@ -183,6 +185,11 @@
       <tr><td>ONVIF</td><td><code id="onvifurl"></code> <span class="dim">(im UniFi Protect unter „Drittanbieter-Kameras“ hinzufügen, Benutzer/Passwort beliebig)</span></td></tr>
     </table>
     <pre id="camlog"></pre>
+    <div class="row" style="margin-top:12px">
+      <button onclick="camDiag()" id="diagbtn">Kamera-Diagnose</button>
+      <span class="dim">findet libcamera keine Kamera: zeigt Treiber, Sensoren und Kernel-Meldungen zum Kopieren</span>
+    </div>
+    <pre id="camdiag" style="display:none; max-height:420px"></pre>
   </section>
 
   <section>
@@ -240,7 +247,7 @@ function renderTabs() {
     <div class="tab">
       <input placeholder="Name" value="${esc(t.name)}" oninput="tabs[${i}].name=this.value">
       <input placeholder="http://…" value="${esc(t.url)}" oninput="tabs[${i}].url=this.value">
-      <label class="check" title="Mit den Home-Assistant-Zugangsdaten anmelden"><input type="checkbox" ${t.ha ? 'checked' : ''} onchange="tabs[${i}].ha=this.checked">HA-Login</label>
+      <label class="check" title="Home-Assistant-Seite: Hell/Dunkel aus „Anzeige“, Anmeldung mit den HA-Zugangsdaten"><input type="checkbox" ${t.ha ? 'checked' : ''} onchange="tabs[${i}].ha=this.checked">Home Assistant</label>
       <div class="btns">
         <button title="nach oben" onclick="moveTab(${i},-1)" ${i ? '' : 'disabled'}>↑</button>
         <button title="nach unten" onclick="moveTab(${i},1)" ${i < tabs.length - 1 ? '' : 'disabled'}>↓</button>
@@ -271,8 +278,10 @@ async function saveRotation() {
   catch (e) { msg('rotmsg', e.message); }
 }
 async function saveTheme() {
-  try { await api('/api/config', {ha: {theme: $('ha_theme').value}}); msg('hamsg', 'Darstellung gespeichert, HA lädt neu.', true); }
-  catch (e) { msg('hamsg', e.message); }
+  const ha = tabs.some(t => t.ha);
+  try { await api('/api/config', {ha: {theme: $('ha_theme').value}});
+        msg('thememsg', ha ? 'Gespeichert, die HA-Tabs laden neu.' : 'Gespeichert. Wirkt, sobald ein Tab den Haken „Home Assistant“ hat.', ha); }
+  catch (e) { msg('thememsg', e.message); }
 }
 
 // ----- camera -----
@@ -397,6 +406,13 @@ async function loadLogs() {
   } catch (e) { $('logs').textContent = e.message; }
 }
 
+async function camDiag() {
+  $('diagbtn').disabled = true; $('camdiag').style.display = 'block'; $('camdiag').textContent = 'Sammle … (bis 30 s)';
+  try { $('camdiag').textContent = (await api('/api/camera/diag')).lines.join('\n'); }
+  catch (e) { $('camdiag').textContent = e.message; }
+  $('diagbtn').disabled = false;
+}
+
 // ----- lock -----
 async function toggleLock() {
   try { await api('/api/lock', {locked: !state.config.locked}); refresh(); } catch (e) { alert(e.message); }
@@ -416,7 +432,7 @@ async function refresh() {
   $('ha_pass').placeholder = s.ha.has_password ? 'gespeichert – leer lassen = unverändert' : '';
   const ha = Object.entries(s.ha.state);
   $('hastate').textContent = !s.config.ha.username ? 'keine Zugangsdaten'
-    : ha.length ? ha.map(([url, st]) => `${url}: ${st}`).join(' · ') : 'noch kein Tab mit HA-Login geladen';
+    : ha.length ? ha.map(([url, st]) => `${url}: ${st}`).join(' · ') : 'noch kein Home-Assistant-Tab angemeldet';
   const c = s.camera;
   $('camstate').textContent = !s.config.camera.enabled ? 'aus' : c.running ? `läuft, ${c.clients} Client(s)` : 'läuft nicht – siehe Log';
   $('rtsp').textContent = c.rtsp; $('onvifurl').textContent = c.onvif;

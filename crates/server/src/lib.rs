@@ -317,6 +317,7 @@ fn route(st: &Arc<State>, req: &mut Request, path: &str, q: &HashMap<String, Str
             }
         }
         (Method::Get, "/api/camera/probe") => ok(st.camera.probe()),
+        (Method::Get, "/api/camera/diag") => ok(json!({"lines": camera_diag()})),
         (Method::Get, "/api/logs") => {
             let unit = q.get("unit").map_or("wts-kiosk", String::as_str);
             if !LOG_UNITS.contains(&unit) {
@@ -418,6 +419,57 @@ fn config_view(st: &State, req: &Request) -> Value {
                    "onvif": format!("http://{host}:{}/onvif/device_service", st.port)},
         "update": st.updater.view(),
     })
+}
+
+/// Why libcamera finds (no) camera: fixed, read-only commands and files, as text to copy from the panel.
+fn camera_diag() -> Vec<String> {
+    let run = |args: &[&str]| -> String {
+        // timeout: a hanging driver must not hang the request
+        match std::process::Command::new("timeout").arg("20").args(args).output() {
+            Ok(o) => format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)),
+            Err(e) => format!("{}: {e}", args[0]),
+        }
+    };
+    let read = |p: &str| fs::read_to_string(p).unwrap_or_default();
+    let mut out = vec!["== System".to_string()];
+    let os = read("/etc/os-release");
+    let name = os.lines().find_map(|l| l.strip_prefix("PRETTY_NAME=")).unwrap_or("?").trim_matches('"');
+    out.push(format!("{name}, Kernel {}, WallTabletSuite {}", read("/proc/sys/kernel/osrelease").trim(), version()));
+
+    out.push("== Video-Geräte".into());
+    let mut dev: Vec<String> = fs::read_dir("/dev").into_iter().flatten().flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| ["video", "media", "v4l-subdev"].iter().any(|p| n.starts_with(p)))
+        .collect();
+    dev.sort();
+    out.push(if dev.is_empty() { "keine".into() } else { dev.join(" ") });
+
+    // sensors, their power chip and the IPU as the firmware lists them (status 15 = present, enabled)
+    out.push("== ACPI (Sensoren, IPU)".into());
+    for e in fs::read_dir("/sys/bus/acpi/devices").into_iter().flatten().flatten() {
+        let p = e.path();
+        let hid = read(&format!("{}/hid", p.display())).trim().to_string();
+        if ["OVTI", "INT33BE", "INT347", "INT343", "SONY", "HIMX", "GCTI", "TPS68"].iter().any(|x| hid.starts_with(x)) {
+            out.push(format!("{} {hid} status={}", e.file_name().to_string_lossy(), read(&format!("{}/status", p.display())).trim()));
+        }
+    }
+
+    out.push("== Kernel-Module".into());
+    let mods: Vec<String> = read("/proc/modules").lines().filter_map(|l| l.split(' ').next()).map(str::to_string)
+        .filter(|m| ["ipu", "cio2", "int3472", "tps68470", "ov", "imx", "dw97", "v4l2", "videobuf"].iter().any(|x| m.contains(x)))
+        .collect();
+    out.push(if mods.is_empty() { "keine passenden".into() } else { mods.join(" ") });
+
+    out.push("== Kernel-Log".into());
+    out.extend(run(&["journalctl", "-k", "-b", "--no-pager", "-o", "cat", "-n", "60",
+        "-g", "(?i)ipu3|cio2|imgu|int3472|tps68470|ipu.bridge|ov[0-9]{4}|sensor"]).lines().map(str::to_string));
+
+    out.push("== libcamera".into());
+    out.extend(run(&["sh", "-c", "ldconfig -p | grep -i 'libcamera\\.so'; gst-inspect-1.0 libcamerasrc 2>&1 | grep -E 'Filename|Version'"])
+        .lines().map(str::to_string));
+    out.push("== cam -l".into());
+    out.extend(run(&["cam", "-l"]).lines().map(str::to_string));
+    out
 }
 
 /// Last lines of a unit's journal from this boot. The kiosk user reads its own entries (journald keeps

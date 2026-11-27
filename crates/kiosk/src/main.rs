@@ -20,11 +20,16 @@ use serde_json::Value;
 use webkit::prelude::*;
 
 const CSS: &str = "
-window, .bar, .empty { background: #101214; color: #e8e8e8; }
-.bar { padding: 10px 8px; border-right: 1px solid #22262a; }
-.bar button { background: none; box-shadow: none; border: none; border-radius: 14px; color: #b8bcc2;
-              font-size: 17px; padding: 20px 14px; margin: 3px 0; min-width: 120px; }
+window, .empty { background: #101214; color: #e8e8e8; }
+.bar { background: #15181b; padding: 8px; }
+.bar.side { border-right: 1px solid #23272b; }
+.bar.top { border-bottom: 1px solid #23272b; }
+.bar button { background: none; background-image: none; box-shadow: none; border: none; border-radius: 12px;
+              color: #aeb4bb; font-size: 17px; font-weight: 500; padding: 18px 16px; margin: 3px; min-width: 110px;
+              transition: background 120ms ease-out, color 120ms ease-out; }
+.bar button:active { background: #23282e; }
 .bar button.active { background: #2f6fd0; color: white; }
+.bar.top button { padding: 11px 16px; min-width: 0; }
 .lock { background: rgba(6, 8, 10, 0.94); }
 .lock-icon { font-size: 90px; }
 .clock { font-size: 72px; font-weight: 300; color: white; }
@@ -159,7 +164,7 @@ fn build_ui(app: &gtk::Application, dir: &Path, safe: bool, careful: bool, start
         s
     });
 
-    let bar = gtk::Box::builder().orientation(gtk::Orientation::Vertical).css_classes(["bar"]).build();
+    let bar = gtk::Box::builder().orientation(gtk::Orientation::Vertical).css_classes(["bar", "side"]).build();
     let stack = gtk::Stack::builder().hexpand(true).vexpand(true).build();
     let main = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     main.append(&bar);
@@ -266,7 +271,9 @@ impl Kiosk {
     }
 
     fn apply(self: &Rc<Self>, v: &Value) {
-        self.rotated.set_degrees(v["rotation"].as_u64().and_then(|r| u16::try_from(r).ok()).unwrap_or(0));
+        let degrees = v["rotation"].as_u64().and_then(|r| u16::try_from(r).ok()).unwrap_or(0);
+        self.rotated.set_degrees(degrees);
+        self.place_bar(degrees % 180 == 90);
         if let Some(tabs) = v["tabs"].as_array()
             && self.st.borrow().tabs.as_ref() != Some(tabs) {
                 self.build(Some(tabs));
@@ -285,6 +292,19 @@ impl Kiosk {
         } else if !self.rotated.failed() && shown {
             self.clear_error(ROT);
         }
+    }
+
+    /// Portrait: tabs in a row on top, the screen is narrow. Landscape: a column on the left.
+    fn place_bar(&self, portrait: bool) {
+        let (outer, row) = if portrait {
+            (gtk::Orientation::Vertical, gtk::Orientation::Horizontal)
+        } else {
+            (gtk::Orientation::Horizontal, gtk::Orientation::Vertical)
+        };
+        self.main.set_orientation(outer);
+        self.bar.set_orientation(row);
+        self.bar.set_homogeneous(portrait); // equal widths across the full row
+        self.bar.set_css_classes(if portrait { &["bar", "top"] } else { &["bar", "side"] });
     }
 
     /// Recreates tab bar and views; `None` = no answer from the server yet.

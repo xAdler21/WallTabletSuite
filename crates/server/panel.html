@@ -413,9 +413,13 @@ async function loadLogs() {
 }
 
 async function camDiag() {
-  $('diagbtn').disabled = true; $('camdiag').style.display = 'block'; $('camdiag').textContent = 'Sammle … (bis 30 s)';
-  try { $('camdiag').textContent = (await api('/api/camera/diag')).lines.join('\n'); }
-  catch (e) { $('camdiag').textContent = e.message; }
+  $('diagbtn').disabled = true; $('camdiag').style.display = 'block'; $('camdiag').textContent = 'Sammle … (bis 40 s)';
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 60000);
+  try {
+    const r = await fetch('/api/camera/diag', {signal: ctl.signal});
+    $('camdiag').textContent = (await r.json()).lines.join('\n');
+  } catch (e) { $('camdiag').textContent = e.name === 'AbortError' ? 'Keine Antwort nach 60 s.' : e.message; }
+  clearTimeout(timer);
   $('diagbtn').disabled = false;
 }
 

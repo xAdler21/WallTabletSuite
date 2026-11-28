@@ -112,7 +112,7 @@ fn status_contract_panel_logs_404() {
     assert_eq!(s.get("/snapshot.jpg").0, 503); // no camera running
     // camera diagnosis: every section is there, also where the tools are missing (Windows, CI)
     let diag = s.get("/api/camera/diag").1["lines"].as_array().unwrap().iter().map(|l| l.as_str().unwrap().to_string()).collect::<Vec<_>>();
-    for section in ["== System", "== Video-Geräte", "== ACPI (Sensoren, IPU)", "== Kernel-Module", "== Kernel-Log", "== libcamera", "== cam -l"] {
+    for section in ["== System", "== Video-Geräte", "== ACPI (Sensoren, IPU)", "== Kernel-Module", "== Kernel-Log", "== libcamera", "== cam -l", "== Kamera-Log"] {
         assert!(diag.iter().any(|l| l == section), "{section} missing in {diag:?}");
     }
 }

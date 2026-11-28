@@ -317,7 +317,7 @@ fn route(st: &Arc<State>, req: &mut Request, path: &str, q: &HashMap<String, Str
             }
         }
         (Method::Get, "/api/camera/probe") => ok(st.camera.probe()),
-        (Method::Get, "/api/camera/diag") => ok(json!({"lines": camera_diag()})),
+        (Method::Get, "/api/camera/diag") => ok(json!({"lines": camera_diag(&st.camera)})),
         (Method::Get, "/api/logs") => {
             let unit = q.get("unit").map_or("wts-kiosk", String::as_str);
             if !LOG_UNITS.contains(&unit) {
@@ -422,14 +422,35 @@ fn config_view(st: &State, req: &Request) -> Value {
 }
 
 /// Why libcamera finds (no) camera: fixed, read-only commands and files, as text to copy from the panel.
-fn camera_diag() -> Vec<String> {
-    let run = |args: &[&str]| -> String {
-        // timeout: a hanging driver must not hang the request
-        match std::process::Command::new("timeout").arg("20").args(args).output() {
-            Ok(o) => format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)),
-            Err(e) => format!("{}: {e}", args[0]),
-        }
+/// Output of a diagnostic command, given up after `secs`. A process stuck in a camera driver (D state)
+/// survives even SIGKILL and keeps its pipes open, so the waiting thread is abandoned instead of joined.
+fn run_limited(args: &[&str], secs: u64) -> String {
+    use std::process::{Command, Stdio};
+    let child = match Command::new(args[0]).args(&args[1..]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
+        Ok(c) => c,
+        Err(e) => return format!("{}: {e}", args[0]),
     };
+    let pid = child.id();
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    match rx.recv_timeout(Duration::from_secs(secs)) {
+        Ok(Ok(o)) => format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)),
+        Ok(Err(e)) => format!("{}: {e}", args[0]),
+        Err(_) => {
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGKILL);
+            }
+            let _ = pid;
+            format!("{}: keine Antwort nach {secs} s, abgebrochen (hängt vermutlich im Treiber)", args[0])
+        }
+    }
+}
+
+fn camera_diag(cam: &camera::Supervisor) -> Vec<String> {
+    let run = |args: &[&str]| run_limited(args, 10);
     let read = |p: &str| fs::read_to_string(p).unwrap_or_default();
     let mut out = vec!["== System".to_string()];
     let os = read("/etc/os-release");
@@ -468,7 +489,14 @@ fn camera_diag() -> Vec<String> {
     out.extend(run(&["sh", "-c", "ldconfig -p | grep -i 'libcamera\\.so'; gst-inspect-1.0 libcamerasrc 2>&1 | grep -E 'Filename|Version'"])
         .lines().map(str::to_string));
     out.push("== cam -l".into());
-    out.extend(run(&["cam", "-l"]).lines().map(str::to_string));
+    if cam.running() {
+        // a second libcamera user next to the running camera can hang in the IPU3 driver
+        out.push("übersprungen, die Kamera läuft (zum Prüfen Kamera ausschalten)".into());
+    } else {
+        out.extend(run(&["cam", "-l"]).lines().map(str::to_string));
+    }
+    out.push("== Kamera-Log".into());
+    out.extend(cam.log().into_iter().rev().take(40).rev());
     out
 }
 
@@ -484,5 +512,16 @@ fn journal(unit: &str) -> Vec<String> {
             String::from_utf8_lossy(&text).lines().map(str::to_string).collect()
         }
         Err(e) => vec![format!("journalctl: {e}")],
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    #[test]
+    fn diag_command_gives_up() {
+        let t = std::time::Instant::now();
+        assert!(super::run_limited(&["sleep", "30"], 1).contains("keine Antwort nach 1 s"));
+        assert!(t.elapsed() < std::time::Duration::from_secs(3));
+        assert_eq!(super::run_limited(&["echo", "hallo"], 5), "hallo\n");
     }
 }

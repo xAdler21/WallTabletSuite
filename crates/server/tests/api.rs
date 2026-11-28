@@ -162,6 +162,10 @@ fn camera_update_rotation_validation() {
     assert_eq!(c["controls"], ok["controls"]);
     assert_eq!(s.post("/api/config", json!({"rotation": 90})).0, 200);
     assert_eq!(s.get("/api/kiosk").1["rotation"], 90);
+    assert_eq!(s.get("/api/kiosk").1["zoom"], 100);
+    assert_eq!(s.post("/api/config", json!({"zoom": 150})).0, 200);
+    assert_eq!(s.get("/api/kiosk").1["zoom"], 150);
+    assert_eq!(s.post("/api/config", json!({"zoom": 10})).0, 400);
 }
 
 fn soap(s: &Srv, svc: &str, action: &str, inner: &str) -> (u16, String) {

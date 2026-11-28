@@ -78,6 +78,11 @@
           <option value="light">Hell</option>
           <option value="dark">Dunkel</option>
         </select></div>
+      <div><label>Seitengröße (Zoom aller Tabs)</label>
+        <select id="zoom" onchange="saveZoom()">
+          <option value="100">100 %</option><option value="125">125 %</option><option value="150">150 %</option>
+          <option value="175">175 %</option><option value="200">200 %</option><option value="250">250 %</option>
+        </select></div>
     </div>
     <p class="dim" style="margin:6px 0 0">Hochkant stehen die Tabs oben. Hell/Dunkel gilt für Tabs mit Haken „Home Assistant“.</p>
     <div class="msg" id="rotmsg"></div>
@@ -277,6 +282,10 @@ async function saveRotation() {
   try { await api('/api/config', {rotation: Number($('rotation').value)}); msg('rotmsg', 'Gespeichert, der Kiosk dreht sich gleich.', true); }
   catch (e) { msg('rotmsg', e.message); }
 }
+async function saveZoom() {
+  try { await api('/api/config', {zoom: Number($('zoom').value)}); msg('rotmsg', 'Gespeichert, die Seiten werden gleich größer/kleiner.', true); }
+  catch (e) { msg('rotmsg', e.message); }
+}
 async function saveTheme() {
   const ha = tabs.some(t => t.ha);
   try { await api('/api/config', {ha: {theme: $('ha_theme').value}});
@@ -468,7 +477,7 @@ function renderApi() {
     ['POST', '/api/lock', 'Body {"locked": true|false}'],
     ['GET', '/api/status', 'Status (Plintus-Vertrag): version, locked, devices'],
     ['GET', '/api/config', 'komplette Konfiguration und Laufzeitstatus'],
-    ['POST', '/api/config', 'Teil-Konfiguration: {"tabs": [...]}, {"camera": {...}}, {"update": {...}}, {"rotation": 90}'],
+    ['POST', '/api/config', 'Teil-Konfiguration: {"tabs": [...]}, {"camera": {...}}, {"update": {...}}, {"rotation": 90}, {"zoom": 150}'],
     ['POST', '/api/config', 'HA hell/dunkel: {"ha": {"theme": "dark"}} (light, dark, auto)'],
     ['GET', '/snapshot.jpg', 'aktuelles Kamerabild'],
   ];
@@ -479,7 +488,7 @@ function renderApi() {
   renderApi();
   await refresh();
   if (state) { tabs = state.config.tabs.map(t => ({...t})); renderTabs(); fillCamera(state.config.camera); fillUpdate(state.config.update); $('ha_user').value = state.config.ha.username;
-    $('ha_theme').value = state.config.ha.theme; $('rotation').value = state.config.rotation; loadControls(); }
+    $('ha_theme').value = state.config.ha.theme; $('rotation').value = state.config.rotation; $('zoom').value = state.config.zoom; loadControls(); }
   setInterval(refresh, 3000);
   refreshPreview();
 })();

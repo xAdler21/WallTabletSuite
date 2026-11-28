@@ -396,7 +396,7 @@ fn kiosk(st: &State, req: &Request, q: &HashMap<String, String>) -> Value {
         }
         v
     }).collect();
-    json!({"locked": cfg.locked, "rotation": cfg.rotation, "tabs": tabs})
+    json!({"locked": cfg.locked, "rotation": cfg.rotation, "zoom": cfg.zoom, "tabs": tabs})
 }
 
 fn config_view(st: &State, req: &Request) -> Value {

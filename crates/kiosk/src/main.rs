@@ -21,16 +21,16 @@ use webkit::prelude::*;
 
 const CSS: &str = "
 window, .empty { background: #101214; color: #e8e8e8; }
-.bar { background: #16191d; padding: 10px; }
-.bar.side { border-right: 1px solid #262b31; }
-.bar.top { border-bottom: 1px solid #262b31; }
+/* wood colours like a beam, flat (no texture) */
+.bar { background: #5b3d26; padding: 10px; }
+.bar.side { border-right: 2px solid #3d2818; }
+.bar.top { border-bottom: 2px solid #3d2818; }
 /* sized for the touch screen at scale 1 (MIIX 520: 1920x1200 on 12 inches) */
-.bar button { background: #1f2328; background-image: none; box-shadow: none; border: 1px solid #2b3037; border-radius: 16px;
-              color: #d6dade; font-size: 26px; font-weight: 600; padding: 24px 28px; margin: 6px; min-width: 190px;
+.bar button { background: #6d4a2f; background-image: none; box-shadow: none; border: 1px solid #7e5838; border-radius: 16px;
+              color: #f3e6d4; font-size: 26px; font-weight: 600; padding: 24px 28px; margin: 6px; min-width: 190px;
               transition: background 120ms ease-out, color 120ms ease-out, box-shadow 120ms ease-out; }
-.bar button:active { background: #2b3139; }
-.bar button.active { background-image: linear-gradient(#3b80e8, #2a66c8); border-color: #4b8ef2; color: white;
-                     box-shadow: 0 3px 12px rgba(47, 111, 208, 0.45); }
+.bar button:active { background: #7c5637; }
+.bar button.active { background: #a8743f; border-color: #c08a52; color: white; box-shadow: 0 3px 10px rgba(30, 18, 8, 0.5); }
 .bar.top button { padding: 18px 12px; margin: 5px; min-width: 0; }
 .lock { background: rgba(6, 8, 10, 0.94); }
 .lock-icon { font-size: 90px; }
@@ -89,6 +89,8 @@ struct State {
     views: Vec<webkit::WebView>,
     buttons: Vec<gtk::Button>,
     current: usize,
+    /// WebKit zoom level of all views, 0 until the server sent one
+    zoom: f64,
 }
 
 fn main() -> glib::ExitCode {
@@ -276,6 +278,14 @@ impl Kiosk {
         let degrees = v["rotation"].as_u64().and_then(|r| u16::try_from(r).ok()).unwrap_or(0);
         self.rotated.set_degrees(degrees);
         self.place_bar(degrees % 180 == 90);
+        // before build(): new views take it from the state; running views change live, without a reload
+        let zoom = v["zoom"].as_f64().unwrap_or(100.0) / 100.0;
+        if self.st.borrow().zoom != zoom {
+            self.st.borrow_mut().zoom = zoom;
+            for view in &self.st.borrow().views {
+                view.set_zoom_level(zoom);
+            }
+        }
         if let Some(tabs) = v["tabs"].as_array()
             && self.st.borrow().tabs.as_ref() != Some(tabs) {
                 self.build(Some(tabs));
@@ -396,6 +406,11 @@ impl Kiosk {
             .hexpand(true)
             .vexpand(true)
             .build();
+        // 1.0 is WebKit's default: left alone (a screen reporting 0 mm makes WebKit's zoom NaN once it is set)
+        let zoom = self.st.borrow().zoom;
+        if zoom > 0.0 && zoom != 1.0 {
+            view.set_zoom_level(zoom);
+        }
         if self.careful
             && let Some(s) = WebViewExt::settings(&view) {
                 s.set_hardware_acceleration_policy(webkit::HardwareAccelerationPolicy::Never);

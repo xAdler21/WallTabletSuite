@@ -41,8 +41,10 @@ procs = []
 # paints everything green, on the blue half yellow: shows where a tap lands in the page.
 PAGE = b"""<!doctype html><html><body style="margin:0">
 <div id="a" style="height:50vh;background:#ff0000" onclick="paint('#00ff00')"></div>
+<div id="zbox" style="display:none;position:fixed;left:0;top:0;width:200px;height:40px;background:#ffff00"></div>
 <div id="b" style="height:50vh;background:#0000ff" onclick="paint('#ffff00')"></div>
-<script>function paint(c) { a.style.background = b.style.background = c; }</script>
+<script>function paint(c) { a.style.background = b.style.background = c; }
+if (location.search == "?zoom") zbox.style.display = "block";</script>
 </body></html>"""
 # green page that opens the red/blue page with window.open on a tap (like Home Assistant's url actions)
 OPENER = b"""<!doctype html><html><body style="margin:0;height:100vh;background:#00ff00"
@@ -138,6 +140,8 @@ def color(shot, fx, fy):
         return "yellow"
     if r < 60 and g < 60 and b < 60:
         return "dark"
+    if r > g > b and 70 < r < 200 and b < 90:
+        return "wood"  # the tab bar
     return f"rgb({r},{g},{b})"
 
 
@@ -252,6 +256,16 @@ def kiosk_checks():
         return
     check("page visible, rotation 0", True)
 
+    # page zoom, live on the running view: the 200x40 px box at the page's top left doubles at 200 %, so
+    # (300, 20) turns yellow
+    probe = lambda s: color(s, 300 / (s[0] - 1), 20 / (s[1] - 1))
+    before = probe(screenshot(wayland))
+    http("/api/config", {"zoom": 200})
+    zoomed = wait(lambda: probe(screenshot(wayland)) == "yellow", 10)
+    http("/api/config", {"zoom": 100})
+    back = wait(lambda: probe(screenshot(wayland)) == "red", 10)
+    check("page zoom 200 % enlarges the page", before == "red" and zoomed and back, f"{before} {zoomed} {back}")
+
     seen = {"last": "top"}
     for deg in (90, 180, 270, 0):
         http("/api/config", {"rotation": deg})
@@ -271,7 +285,7 @@ def kiosk_checks():
         http("/api/config", {"rotation": deg, "tabs": [{"name": "Test", "url": f"http://127.0.0.1:{PAGE_PORT}/?t={n}"}]})
         time.sleep(2)  # the new page looks like the old one: give the kiosk time to swap and load it before tapping
         fresh = wait(lambda: layout(screenshot(wayland)) == {0: "top", 90: "right", 270: "left"}[deg], 15)
-        err = tap(wayland, fx, fy) if fresh else "page not shown"
+        err = tap(wayland, fx, fy) if fresh else f"page not shown: {layout(screenshot(wayland))}"
         got = wait(lambda: color(screenshot(wayland), 0.5, 0.5) == want, 5)
         check(f"tap at {deg} degrees lands in the {'red' if want == 'green' else 'blue'} half", got,
               err or color(screenshot(wayland), 0.5, 0.5))
@@ -297,16 +311,16 @@ def kiosk_checks():
     time.sleep(5)
     check("kiosk survives tab change + HA theme script", cage.poll() is None, tail("kiosk"))
     shot = screenshot(wayland)
-    check("tab bar shown with two tabs", color(shot, 0.02, 0.5) == "dark" and color(shot, 0.6, 0.15) == "red",
+    check("tab bar shown with two tabs", color(shot, 0.02, 0.5) == "wood" and color(shot, 0.6, 0.15) == "red",
           f"{color(shot, 0.02, 0.5)} / {color(shot, 0.6, 0.15)}")
     # portrait: the bar moves to the top of the turned picture, at 90 degrees that is the screen's right edge;
     # the page's red half (its top) is next to it, the blue half on the left
     http("/api/config", {"rotation": 90})
     probes = lambda s: (color(s, 0.985, 0.5), color(s, 0.75, 0.5), color(s, 0.25, 0.5), color(s, 0.02, 0.5))
-    on_top = wait(lambda: probes(screenshot(wayland)) == ("dark", "red", "blue", "blue"), 15)
+    on_top = wait(lambda: probes(screenshot(wayland)) == ("wood", "red", "blue", "blue"), 15)
     check("portrait: tab bar on top", on_top, str(probes(screenshot(wayland))))
     http("/api/config", {"rotation": 0})
-    wait(lambda: color(screenshot(wayland), 0.02, 0.5) == "dark", 15)
+    wait(lambda: color(screenshot(wayland), 0.02, 0.5) == "wood", 15)
     check("kiosk log has no panic", "panicked" not in (TMP / "kiosk.log").read_text(errors="replace"), tail("kiosk"))
 
     # crash guard: the 4th start within 3 minutes is a safe mode that the server and the health check see
@@ -412,7 +426,9 @@ def main():
     threading.Thread(target=page.serve_forever, daemon=True).start()
     data = TMP / "data"
     data.mkdir()
-    (data / "config.json").write_text(json.dumps({"tabs": [{"name": "Test", "url": f"http://127.0.0.1:{PAGE_PORT}/"}]}))
+    # ?zoom: the first page has the px box for the zoom check. Only on the first view: under the headless cage
+    # (0 mm screen) WebKit's zoom of later views is NaN, px sizes there blow up (vh sizes are fine)
+    (data / "config.json").write_text(json.dumps({"tabs": [{"name": "Test", "url": f"http://127.0.0.1:{PAGE_PORT}/?zoom"}]}))
     start("server", [str(BIN / "wts-server")], {"WTS_DATA": str(data), "WTS_PORT": str(PORT)})
     try:
         if check("server answers", wait(lambda: http("/api/status")[0] == 200, 20), tail("server")):

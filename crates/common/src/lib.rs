@@ -22,6 +22,9 @@ pub fn version() -> &'static str {
 pub struct Config {
     pub locked: bool,
     pub rotation: u16,
+    /// page zoom of all tabs in percent (WebKit zoom level), for the high-DPI screen
+    #[serde(default = "default_zoom")]
+    pub zoom: u16,
     pub tabs: Vec<Tab>,
     pub ha: Ha,
     pub camera: Camera,
@@ -80,6 +83,7 @@ impl Default for Config {
         Config {
             locked: false,
             rotation: 0,
+            zoom: 100,
             tabs: vec![Tab { name: "Home Assistant".into(), url: "http://homeassistant.local:8123/".into(), ha: true }],
             ha: Ha { username: String::new(), password: String::new(), theme: "auto".into() },
             camera: Camera::default(),
@@ -132,6 +136,9 @@ impl Config {
         if let Some(r) = saved.get("rotation").and_then(rotation) {
             c.rotation = r;
         }
+        if let Some(z) = saved.get("zoom").and_then(zoom) {
+            c.zoom = z;
+        }
         if let Some(Ok(tabs)) = saved.get("tabs").map(clean_tabs) {
             c.tabs = tabs;
         }
@@ -168,6 +175,9 @@ impl Config {
         if let Some(r) = data.get("rotation") {
             c.rotation = rotation(r).ok_or("rotation: 0, 90, 180 oder 270")?;
         }
+        if let Some(z) = data.get("zoom") {
+            c.zoom = zoom(z).ok_or("zoom: ganze Prozent von 50 bis 300")?;
+        }
         if let Some(cam) = data.get("camera") {
             c.camera = clean_camera(cam.as_object().ok_or("camera muss ein Objekt sein")?, &self.camera)?;
         }
@@ -187,6 +197,14 @@ fn camera_keys() -> Vec<&'static str> {
         "encoder", "profile", "gop", "sub_enabled", "sub_width", "sub_height", "sub_bitrate", "audio_enabled",
         "audio_device", "controls",
     ]
+}
+
+fn default_zoom() -> u16 {
+    100
+}
+
+fn zoom(v: &Value) -> Option<u16> {
+    v.as_u64().filter(|z| (50..=300).contains(z)).map(|z| z as u16)
 }
 
 fn rotation(v: &Value) -> Option<u16> {
@@ -488,7 +506,12 @@ mod tests {
         assert!(base.apply(&obj(json!({"update": {"branch": "-x"}}))).is_err());
         assert!(base.apply(&obj(json!({"ha": {"theme": "lila"}}))).is_err());
         let c = base.apply(&obj(json!({"rotation": 90, "ha": {"username": "kiosk", "password": "pw"}}))).unwrap();
-        assert_eq!(c.rotation, 90);
+        assert_eq!((c.rotation, c.zoom), (90, 100));
+        assert!(c.apply(&obj(json!({"zoom": 20}))).is_err());
+        assert!(c.apply(&obj(json!({"zoom": 1.5}))).is_err());
+        assert_eq!(c.apply(&obj(json!({"zoom": 150}))).unwrap().zoom, 150);
+        assert_eq!(Config::from_json(r#"{"zoom": 125}"#).zoom, 125);
+        assert_eq!(Config::from_json(r#"{"zoom": 9000}"#).zoom, 100);
         let c = c.apply(&obj(json!({"ha": {"theme": "dark"}}))).unwrap();
         assert_eq!((c.ha.username.as_str(), c.ha.theme.as_str()), ("kiosk", "dark"));
         let c = c.apply(&obj(json!({"ha": {"username": "kiosk", "password": ""}}))).unwrap();

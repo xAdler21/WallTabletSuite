@@ -33,6 +33,8 @@ Das Skript installiert die Pakete und legt den Benutzer `kiosk` an. Es legt das 
 
 **Hochkant:** Im Panel unter *Anzeige* drehen. Der Kiosk dreht sein Bild selbst (in GTK), Touch dreht automatisch mit, ohne Neustart. Hochkant stehen die Tabs oben in einer Zeile, quer links. Einzige Ausnahme beim Drehen: Aufklapplisten (`<select>`) einer Webseite öffnen sich ungedreht.
 
+**Schrift zu klein:** Im Panel unter *Anzeige* die *Seitengröße* hochsetzen (125–250 %, per API `{"zoom": 150}`). Das vergrößert alle Tabs wie Strg+Plus im Browser, ohne Neustart. Der MIIX 520 hat 1920×1200 auf 12 Zoll, unter cage ohne Skalierung, deshalb wirkt 100 % sehr klein.
+
 ## Wenn der Kiosk abstürzt
 
 Startet der Kiosk viermal innerhalb von drei Minuten, geht er in den **sicheren Modus**: keine Webseiten, nur ein Hinweis auf dem Bildschirm, das Panel zeigt „sicherer Modus“. Nach 5 Minuten versucht er es wieder, ab dann mit Software-Grafik (die häufigste Absturzursache ist der GPU-Pfad von WebKit). `install.sh` setzt das zurück.

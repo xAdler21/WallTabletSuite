@@ -21,15 +21,17 @@ use webkit::prelude::*;
 
 const CSS: &str = "
 window, .empty { background: #101214; color: #e8e8e8; }
-.bar { background: #15181b; padding: 8px; }
-.bar.side { border-right: 1px solid #23272b; }
-.bar.top { border-bottom: 1px solid #23272b; }
-.bar button { background: none; background-image: none; box-shadow: none; border: none; border-radius: 12px;
-              color: #aeb4bb; font-size: 17px; font-weight: 500; padding: 18px 16px; margin: 3px; min-width: 110px;
-              transition: background 120ms ease-out, color 120ms ease-out; }
-.bar button:active { background: #23282e; }
-.bar button.active { background: #2f6fd0; color: white; }
-.bar.top button { padding: 11px 16px; min-width: 0; }
+.bar { background: #16191d; padding: 10px; }
+.bar.side { border-right: 1px solid #262b31; }
+.bar.top { border-bottom: 1px solid #262b31; }
+/* sized for the touch screen at scale 1 (MIIX 520: 1920x1200 on 12 inches) */
+.bar button { background: #1f2328; background-image: none; box-shadow: none; border: 1px solid #2b3037; border-radius: 16px;
+              color: #d6dade; font-size: 26px; font-weight: 600; padding: 24px 28px; margin: 6px; min-width: 190px;
+              transition: background 120ms ease-out, color 120ms ease-out, box-shadow 120ms ease-out; }
+.bar button:active { background: #2b3139; }
+.bar button.active { background-image: linear-gradient(#3b80e8, #2a66c8); border-color: #4b8ef2; color: white;
+                     box-shadow: 0 3px 12px rgba(47, 111, 208, 0.45); }
+.bar.top button { padding: 18px 12px; margin: 5px; min-width: 0; }
 .lock { background: rgba(6, 8, 10, 0.94); }
 .lock-icon { font-size: 90px; }
 .clock { font-size: 72px; font-weight: 300; color: white; }
@@ -331,7 +333,13 @@ impl Kiosk {
                 let view = self.view(session, tab);
                 self.stack.add_named(&view, Some(&i.to_string()));
                 views.push(view);
-                let button = gtk::Button::with_label(tab["name"].as_str().unwrap_or("?"));
+                // ellipsized: long names must not push the bar (and the window) past the screen edge
+                let label = gtk::Label::builder()
+                    .label(tab["name"].as_str().unwrap_or("?"))
+                    .ellipsize(gtk::pango::EllipsizeMode::End)
+                    .max_width_chars(14)
+                    .build();
+                let button = gtk::Button::builder().child(&label).build();
                 let weak = Rc::downgrade(self);
                 button.connect_clicked(move |_| {
                     if let Some(k) = weak.upgrade() {

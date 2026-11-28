@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 
 pub const PORT: u16 = 8447;
 pub const RTSP_PORT: u16 = 8554;
-/// Written by the camera once a second, served by the server as /snapshot.jpg.
+/// Written by the camera 5 times a second, served by the server as /snapshot.jpg.
 pub const SNAPSHOT: &str = "/dev/shm/walltablet-snapshot.jpg";
 pub const AUDIO_RATE: u32 = 16000;
 pub const H264_PROFILES: [(&str, &str); 3] = [("main", "Main"), ("high", "High"), ("constrained-baseline", "Baseline")];

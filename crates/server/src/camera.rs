@@ -72,7 +72,9 @@ impl Supervisor {
         i.epoch += 1;
         i.config = c;
         i.probed = None;
-        stop(&mut i);
+        if let Some(note) = stop(&mut i) {
+            self.say(note);
+        }
         self.clients.store(0, Ordering::Relaxed);
         if i.config.enabled {
             self.start(&mut i);
@@ -197,21 +199,40 @@ fn lines(r: impl Read) -> impl Iterator<Item = String> {
     BufReader::new(r).split(b'\n').map_while(Result::ok).map(|l| String::from_utf8_lossy(&l).trim_end().to_string())
 }
 
-/// SIGTERM first so libcamera releases the camera cleanly, SIGKILL after 5 s.
-fn stop(i: &mut Inner) {
+/// Waits up to `secs` for the child to exit; true if it did.
+fn exited(child: &mut Child, secs: u64) -> bool {
+    let until = Instant::now() + Duration::from_secs(secs);
+    loop {
+        if !matches!(child.try_wait(), Ok(None)) {
+            return true;
+        }
+        if Instant::now() >= until {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// SIGTERM first so libcamera stops the camera cleanly (IPU3 can need a few seconds), SIGKILL after 10 s.
+/// A new camera only starts once the old one is gone: two processes on the device break the next start.
+/// Returns a note for the log when the camera had to be killed.
+fn stop(i: &mut Inner) -> Option<&'static str> {
     i.stdin = None;
-    let Some(mut child) = i.child.take() else { return };
+    let mut child = i.child.take()?;
     #[cfg(unix)]
     unsafe {
         libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
     }
-    let until = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < until && matches!(child.try_wait(), Ok(None)) {
-        std::thread::sleep(Duration::from_millis(50));
+    if exited(&mut child, 10) {
+        return None;
     }
     let _ = child.kill();
+    if exited(&mut child, 5) {
+        return Some("Kamera-Prozess reagierte 10 s nicht auf Beenden, hart beendet");
+    }
     // reaped outside the lock: a process stuck in a driver call (D state) would otherwise block it for good
     std::thread::spawn(move || child.wait());
+    Some("Kamera-Prozess hängt im Treiber und lässt sich nicht beenden, Tablet neu starten")
 }
 
 fn runtime_dir() -> Option<PathBuf> {

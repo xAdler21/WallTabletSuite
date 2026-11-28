@@ -1,6 +1,6 @@
 //! wts-camera, started by wts-server as `wts-camera '<camera json>' <rtsp port>`.
 //! One capture pipeline runs all the time and feeds the RTSP streams /stream (main, with audio if enabled)
-//! and /sub (small) through inter elements, plus a JPEG snapshot once a second.
+//! and /sub (small) through inter elements, plus a JPEG snapshot 5 times a second (panel preview).
 //! Stdout: log lines, "CLIENTS n", "PROBE {json}". Stdin: one {"controls": {...}} per line, applied live;
 //! the end of stdin (server gone) stops the camera.
 //! `wts-camera --probe '<camera json>'` prints the cameras and controls as JSON and exits.
@@ -55,7 +55,7 @@ pub fn capture(c: &Camera) -> String {
         ),
         // sync=false: intervideosrc re-times the frames on the RTSP side anyway
         "t. ! queue leaky=downstream max-size-buffers=2 ! intervideosink channel=main sync=false".into(),
-        "t. ! queue leaky=downstream max-size-buffers=1 ! videorate drop-only=true ! video/x-raw,framerate=1/1 ! jpegenc quality=85 ! appsink name=snap max-buffers=1 drop=true sync=false".into(),
+        "t. ! queue leaky=downstream max-size-buffers=1 ! videorate drop-only=true ! video/x-raw,framerate=5/1 ! jpegenc quality=85 ! appsink name=snap max-buffers=1 drop=true sync=false".into(),
     ];
     if c.sub_enabled {
         let (sw, sh) = size(c, true);

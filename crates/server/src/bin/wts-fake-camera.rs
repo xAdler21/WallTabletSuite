@@ -1,5 +1,6 @@
 //! Test double for wts-camera (used by tests/api.rs, not shipped): speaks the same stdin/stdout protocol.
-//! Camera name "crash" exits right after starting; custom_source "probe-fail" makes --probe fail.
+//! Camera name "crash" exits right after starting, "stuck" ignores SIGTERM; custom_source "probe-fail" makes
+//! --probe fail.
 
 use std::io::BufRead;
 
@@ -22,6 +23,12 @@ fn main() {
     println!("CLIENTS 2");
     if config["name"] == "crash" {
         std::process::exit(3);
+    }
+    #[cfg(unix)]
+    if config["name"] == "stuck" {
+        // like libcamera hanging in stop: only SIGKILL ends it
+        unsafe { libc::signal(libc::SIGTERM, libc::SIG_IGN) };
+        std::thread::sleep(std::time::Duration::from_secs(600));
     }
     for line in std::io::stdin().lock().lines().map_while(Result::ok) {
         println!("SET {line}");

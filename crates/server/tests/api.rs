@@ -333,3 +333,18 @@ fn camera_supervisor() {
     assert_eq!(starts(&s.config()), starts(&c));
     assert_eq!(s.config()["camera"]["running"], false);
 }
+
+#[cfg(unix)]
+#[test]
+fn camera_stop_kills_a_stuck_process() {
+    let s = start("stuck");
+    assert_eq!(s.post("/api/config", json!({"camera": {"enabled": true, "name": "stuck"}})).0, 200);
+    s.wait("camera runs", |c| c["camera"]["running"] == true && c["camera"]["clients"] == 2);
+    let t = std::time::Instant::now();
+    // ignores SIGTERM: killed after the grace time, and gone before the call returns
+    assert_eq!(s.post("/api/config", json!({"camera": {"enabled": false}})).0, 200);
+    assert!(t.elapsed() >= Duration::from_secs(9), "{:?}", t.elapsed());
+    let c = s.config();
+    assert_eq!(c["camera"]["running"], false);
+    assert!(c["camera"]["log"].as_array().unwrap().iter().any(|l| l.as_str().unwrap().ends_with("hart beendet")), "{c}");
+}

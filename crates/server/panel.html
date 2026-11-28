@@ -372,11 +372,17 @@ async function resetControl(name, def) {
   try { await api('/api/config', {camera: {controls}}); msg('cammsg', 'Regler zurückgesetzt, Kamera startet neu.', true); }
   catch (e) { msg('cammsg', e.message); }
 }
+// next frame as soon as the last one is shown (the camera writes 5 per second), paused while the page is hidden
 function refreshPreview() {
-  if (!state || !state.config.camera.enabled || !state.camera.running) { $('preview').style.display = 'none'; return; }
-  const img = new Image();
-  img.onload = () => { $('preview').src = img.src; $('preview').style.display = 'block'; };
-  img.src = '/snapshot.jpg?t=' + Date.now();
+  const again = ms => setTimeout(refreshPreview, ms);
+  if (document.hidden || !state || !state.config.camera.enabled || !state.camera.running) {
+    if (!document.hidden) $('preview').style.display = 'none';
+    return again(1000);
+  }
+  const img = new Image(), t0 = Date.now();
+  img.onload = () => { $('preview').src = img.src; $('preview').style.display = 'block'; again(Math.max(0, 200 - (Date.now() - t0))); };
+  img.onerror = () => again(1000);
+  img.src = '/snapshot.jpg?t=' + t0;
 }
 
 // ----- update -----
@@ -471,7 +477,7 @@ function renderApi() {
   if (state) { tabs = state.config.tabs.map(t => ({...t})); renderTabs(); fillCamera(state.config.camera); fillUpdate(state.config.update); $('ha_user').value = state.config.ha.username;
     $('ha_theme').value = state.config.ha.theme; $('rotation').value = state.config.rotation; loadControls(); }
   setInterval(refresh, 3000);
-  setInterval(refreshPreview, 2000);
+  refreshPreview();
 })();
 </script>
 </body>
